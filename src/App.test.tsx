@@ -34,10 +34,12 @@ describe('PeopleCloud application', () => {
     render(<App />)
     await user.click(screen.getByRole('button', { name: '进入星图' }))
     const filters = screen.getByRole('region', { name: '测试人物地图' }).parentElement!
+    await user.click(screen.getByRole('button', { name: /隋，581—618/ }))
     const medicine = within(filters).getByRole('button', { name: /医学/ })
     expect(medicine).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: /唐，618—907/ }))
     await user.click(within(filters).getByRole('button', { name: /文学/ }))
-    expect(screen.getByText('文学 · 3 位人物')).toBeInTheDocument()
+    expect(screen.getByText(/文学 · \d+ 位人物/)).toBeInTheDocument()
   })
 
   it('searches the full directory and selects a cross-period person', async () => {

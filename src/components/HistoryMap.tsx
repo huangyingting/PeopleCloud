@@ -11,7 +11,7 @@ import * as THREE from 'three'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { MapPin, RotateCcw, Sparkles } from 'lucide-react'
 import { periodById } from '../data/periods'
-import type { Person } from '../types'
+import type { CategoryId, Person } from '../types'
 
 const chinaBounds: [[number, number], [number, number]] = [[72, 16], [136, 54]]
 
@@ -71,6 +71,23 @@ function glowTexture() {
   return new THREE.CanvasTexture(canvas)
 }
 
+const categoryColors: Record<CategoryId, number> = {
+  thought: 0xd9bd79,
+  politics: 0xc96c58,
+  military: 0xd39059,
+  literature: 0x9db6d4,
+  art: 0xc391bd,
+  science: 0x72c3b4,
+  medicine: 0x8fc681,
+  exploration: 0x7fa9d0,
+}
+
+interface Traveler {
+  mesh: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
+  curve: THREE.QuadraticBezierCurve3
+  phase: number
+}
+
 class ConstellationOverlay {
   private readonly map: MapType
   private readonly container: HTMLElement
@@ -82,7 +99,12 @@ class ConstellationOverlay {
   private people: Person[] = []
   private selected: Person | null = null
   private frame = 0
-  private pulseFrame = 0
+  private animationFrame = 0
+  private startedAt = performance.now()
+  private pulseStartedAt = 0
+  private travelers: Traveler[] = []
+  private pulseRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial> | null = null
+  private orbitRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial> | null = null
   private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
   constructor(map: MapType, container: HTMLElement) {
@@ -101,21 +123,23 @@ class ConstellationOverlay {
     this.scene.add(this.group)
     this.map.on('move', this.scheduleDraw)
     this.map.on('resize', this.scheduleDraw)
+    document.addEventListener('visibilitychange', this.handleVisibility)
+    this.ensureAnimation()
   }
 
   update(people: Person[], selected: Person) {
     const changed = this.selected?.id !== selected.id
     this.people = people
     this.selected = selected
-    this.draw()
-    if (changed && !this.reducedMotion) this.animatePulse()
+    if (changed) this.pulseStartedAt = performance.now()
+    this.buildScene()
   }
 
   private scheduleDraw = () => {
     if (this.frame) return
     this.frame = window.requestAnimationFrame(() => {
       this.frame = 0
-      this.draw()
+      this.buildScene()
     })
   }
 
@@ -127,6 +151,9 @@ class ConstellationOverlay {
       if (Array.isArray(material)) material.forEach((entry) => entry.dispose())
       else material?.dispose()
     }
+    this.travelers = []
+    this.pulseRing = null
+    this.orbitRing = null
   }
 
   private point(person: Person, width: number, height: number) {
@@ -134,11 +161,10 @@ class ConstellationOverlay {
     return new THREE.Vector3(projected.x - width / 2, height / 2 - projected.y, 0)
   }
 
-  private draw(pulse = 0) {
-    if (!this.selected) return
+  private setupViewport() {
     const width = this.container.clientWidth
     const height = this.container.clientHeight
-    if (!width || !height) return
+    if (!width || !height) return null
     this.renderer.setSize(width, height, false)
     this.camera.left = -width / 2
     this.camera.right = width / 2
@@ -148,60 +174,160 @@ class ConstellationOverlay {
     this.camera.far = 100
     this.camera.position.z = 10
     this.camera.updateProjectionMatrix()
+    return { width, height }
+  }
+
+  private buildScene() {
+    if (!this.selected) return
+    const viewport = this.setupViewport()
+    if (!viewport) return
+    const { width, height } = viewport
     this.clear()
 
     const positions = new Float32Array(this.people.length * 3)
+    const colors = new Float32Array(this.people.length * 3)
+    const projected = new Map<string, THREE.Vector3>()
     this.people.forEach((person, index) => {
-      const projected = this.point(person, width, height)
-      positions[index * 3] = projected.x
-      positions[index * 3 + 1] = projected.y
+      const point = this.point(person, width, height)
+      const color = new THREE.Color(categoryColors[person.categories[0]])
+      projected.set(person.id, point)
+      positions[index * 3] = point.x
+      positions[index * 3 + 1] = point.y
       positions[index * 3 + 2] = person.id === this.selected?.id ? 2 : 1
+      colors[index * 3] = color.r
+      colors[index * 3 + 1] = color.g
+      colors[index * 3 + 2] = color.b
     })
     const geometry = new THREE.BufferGeometry()
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
     const points = new THREE.Points(geometry, new THREE.PointsMaterial({
-      color: 0xe6bd73,
+      vertexColors: true,
       map: this.texture,
       transparent: true,
-      opacity: 0.82,
-      size: 24,
+      opacity: 0.88,
+      size: this.people.length > 14 ? 21 : 24,
+      sizeAttenuation: false,
       depthTest: false,
       blending: THREE.AdditiveBlending,
     }))
     this.group.add(points)
 
-    const selectedPoint = this.point(this.selected, width, height)
+    const threads: number[] = []
+    const threadKeys = new Set<string>()
+    for (const person of this.people) {
+      const origin = projected.get(person.id)!
+      const nearest = this.people
+        .filter((candidate) => candidate.id !== person.id)
+        .map((candidate) => ({ candidate, distance: origin.distanceTo(projected.get(candidate.id)!) }))
+        .filter((entry) => entry.distance < 245)
+        .sort((a, b) => a.distance - b.distance)
+        .slice(0, 1)
+      for (const { candidate } of nearest) {
+        const key = [person.id, candidate.id].sort().join(':')
+        if (threadKeys.has(key)) continue
+        threadKeys.add(key)
+        const target = projected.get(candidate.id)!
+        threads.push(origin.x, origin.y, 0, target.x, target.y, 0)
+      }
+    }
+    if (threads.length) {
+      const threadGeometry = new THREE.BufferGeometry()
+      threadGeometry.setAttribute('position', new THREE.Float32BufferAttribute(threads, 3))
+      this.group.add(new THREE.LineSegments(threadGeometry, new THREE.LineBasicMaterial({
+        color: 0x7ea89e,
+        transparent: true,
+        opacity: 0.12,
+        depthTest: false,
+        blending: THREE.AdditiveBlending,
+      })))
+    }
+
+    const selectedPoint = projected.get(this.selected.id)!
     const related = this.people
       .filter((person) => person.id !== this.selected?.id)
       .map((person) => ({
         person,
         explicit: this.selected?.relations.some((relation) => relation.targetId === person.id) || person.relations.some((relation) => relation.targetId === this.selected?.id),
-        shared: person.categories.some((category) => this.selected?.categories.includes(category)),
+        shared: person.categories.filter((category) => this.selected?.categories.includes(category)).length,
       }))
-      .filter((entry) => entry.explicit || entry.shared)
-      .sort((a, b) => Number(b.explicit) - Number(a.explicit))
-      .slice(0, 5)
+      .filter((entry) => entry.explicit || entry.shared > 0)
+      .sort((a, b) => Number(b.explicit) - Number(a.explicit) || b.shared - a.shared || projected.get(a.person.id)!.distanceTo(selectedPoint) - projected.get(b.person.id)!.distanceTo(selectedPoint))
+      .slice(0, this.people.length > 14 ? 6 : 7)
 
-    for (const entry of related) {
-      const target = this.point(entry.person, width, height)
+    related.forEach((entry, index) => {
+      const target = projected.get(entry.person.id)!
       const distance = selectedPoint.distanceTo(target)
       const middle = selectedPoint.clone().lerp(target, 0.5)
-      middle.y += Math.min(90, 24 + distance * 0.13)
+      middle.y += Math.min(96, 22 + distance * 0.12) * (index % 2 ? -1 : 1)
       const curve = new THREE.QuadraticBezierCurve3(selectedPoint, middle, target)
       const line = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(curve.getPoints(42)),
-        new THREE.LineBasicMaterial({ color: entry.explicit ? 0xf1c77a : 0x8fbab0, transparent: true, opacity: entry.explicit ? 0.7 : 0.28, depthTest: false }),
+        new THREE.BufferGeometry().setFromPoints(curve.getPoints(48)),
+        new THREE.LineBasicMaterial({
+          color: entry.explicit ? 0xf2c66f : 0x83b6ad,
+          transparent: true,
+          opacity: entry.explicit ? 0.76 : 0.3,
+          depthTest: false,
+          blending: THREE.AdditiveBlending,
+        }),
       )
       this.group.add(line)
+      const traveler = new THREE.Mesh(
+        new THREE.CircleGeometry(entry.explicit ? 3 : 2.2, 16),
+        new THREE.MeshBasicMaterial({
+          color: entry.explicit ? 0xffdda0 : 0x9de1d2,
+          transparent: true,
+          opacity: entry.explicit ? 0.95 : 0.72,
+          depthTest: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      )
+      this.group.add(traveler)
+      this.travelers.push({ mesh: traveler, curve, phase: index / Math.max(1, related.length) })
+    })
+    this.renderer.domElement.dataset.peopleCount = String(this.people.length)
+    this.renderer.domElement.dataset.connectionCount = String(related.length)
+    this.renderer.domElement.dataset.motion = this.reducedMotion ? 'reduced' : 'animated'
+
+    this.pulseRing = new THREE.Mesh(
+      new THREE.RingGeometry(16, 17.5, 72),
+      new THREE.MeshBasicMaterial({ color: 0xf5c974, transparent: true, opacity: 0, side: THREE.DoubleSide, depthTest: false, blending: THREE.AdditiveBlending }),
+    )
+    this.pulseRing.position.copy(selectedPoint)
+    this.group.add(this.pulseRing)
+    this.orbitRing = new THREE.Mesh(
+      new THREE.RingGeometry(22, 22.8, 96, 1, 0.25, Math.PI * 1.55),
+      new THREE.MeshBasicMaterial({ color: 0xe7b866, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthTest: false, blending: THREE.AdditiveBlending }),
+    )
+    this.orbitRing.position.copy(selectedPoint)
+    this.group.add(this.orbitRing)
+    this.renderFrame(performance.now())
+    this.ensureAnimation()
+  }
+
+  private renderFrame(now: number) {
+    const elapsed = now - this.startedAt
+    if (!this.reducedMotion) {
+      this.travelers.forEach(({ mesh, curve, phase }, index) => {
+        const progress = (elapsed / (2800 + index * 130) + phase) % 1
+        mesh.position.copy(curve.getPoint(progress))
+        mesh.scale.setScalar(0.72 + Math.sin(progress * Math.PI) * 0.5)
+      })
+      if (this.orbitRing) {
+        this.orbitRing.rotation.z = elapsed / 4200
+        const breath = 1 + Math.sin(elapsed / 520) * 0.045
+        this.orbitRing.scale.setScalar(breath)
+      }
+    } else {
+      this.travelers.forEach(({ mesh, curve }, index) => mesh.position.copy(curve.getPoint((index + 1) / (this.travelers.length + 1))))
     }
 
-    const ringRadius = 15 + pulse * 34
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(ringRadius, ringRadius + 1.4, 72),
-      new THREE.MeshBasicMaterial({ color: 0xf0c477, transparent: true, opacity: 0.75 * (1 - pulse), side: THREE.DoubleSide, depthTest: false }),
-    )
-    ring.position.copy(selectedPoint)
-    this.group.add(ring)
+    if (this.pulseRing) {
+      const pulse = this.pulseStartedAt ? Math.min(1, (now - this.pulseStartedAt) / 1050) : 1
+      this.pulseRing.scale.setScalar(1 + pulse * 2.6)
+      this.pulseRing.material.opacity = this.reducedMotion ? 0 : 0.78 * (1 - pulse)
+      if (pulse >= 1) this.pulseStartedAt = 0
+    }
     try {
       this.renderer.render(this.scene, this.camera)
     } catch (error) {
@@ -210,22 +336,25 @@ class ConstellationOverlay {
     }
   }
 
-  private animatePulse() {
-    window.cancelAnimationFrame(this.pulseFrame)
-    const start = performance.now()
-    const step = (now: number) => {
-      const progress = Math.min(1, (now - start) / 900)
-      this.draw(progress)
-      if (progress < 1) this.pulseFrame = window.requestAnimationFrame(step)
-    }
-    this.pulseFrame = window.requestAnimationFrame(step)
+  private animate = (now: number) => {
+    this.animationFrame = 0
+    this.renderFrame(now)
+    this.ensureAnimation()
   }
+
+  private ensureAnimation() {
+    if (this.reducedMotion || this.animationFrame || document.hidden) return
+    this.animationFrame = window.requestAnimationFrame(this.animate)
+  }
+
+  private handleVisibility = () => this.ensureAnimation()
 
   dispose() {
     window.cancelAnimationFrame(this.frame)
-    window.cancelAnimationFrame(this.pulseFrame)
+    window.cancelAnimationFrame(this.animationFrame)
     this.map.off('move', this.scheduleDraw)
     this.map.off('resize', this.scheduleDraw)
+    document.removeEventListener('visibilitychange', this.handleVisibility)
     this.clear()
     this.texture.dispose()
     this.renderer.dispose()
@@ -239,12 +368,19 @@ interface HistoryMapProps {
   onSelect: (person: Person) => void
 }
 
+interface MarkerEntry {
+  marker: Marker
+  button: HTMLButtonElement
+  person: Person
+  offsetX: number
+}
+
 export default function HistoryMap({ people, selected, onSelect }: HistoryMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapType | null>(null)
   const starsRef = useRef<ConstellationOverlay | null>(null)
-  const markersRef = useRef<Marker[]>([])
+  const markersRef = useRef<MarkerEntry[]>([])
   const [ready, setReady] = useState(false)
   const [fatalError, setFatalError] = useState(!supportsWebGl())
   const [tileWarning, setTileWarning] = useState(false)
@@ -296,7 +432,7 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
     return () => {
       starsRef.current?.dispose()
       starsRef.current = null
-      markersRef.current.forEach((marker) => marker.remove())
+      markersRef.current.forEach(({ marker }) => marker.remove())
       markersRef.current = []
       map?.remove()
       mapRef.current = null
@@ -306,7 +442,7 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
   useEffect(() => {
     const map = mapRef.current
     if (!map || !ready) return
-    markersRef.current.forEach((marker) => marker.remove())
+    markersRef.current.forEach(({ marker }) => marker.remove())
     const groups = new Map<string, Person[]>()
     for (const person of people) {
       const key = `${person.place.longitude.toFixed(4)},${person.place.latitude.toFixed(4)}`
@@ -323,11 +459,43 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
       const group = groups.get(`${person.place.longitude.toFixed(4)},${person.place.latitude.toFixed(4)}`) ?? [person]
       const index = group.findIndex((entry) => entry.id === person.id)
       const offsetX = (index - (group.length - 1) / 2) * 38
-      return new Marker({ element: button, anchor: 'center', offset: [offsetX, 0] })
+      const marker = new Marker({ element: button, anchor: 'center', offset: [offsetX, 0] })
         .setLngLat([person.place.longitude, person.place.latitude])
         .addTo(map)
+      return { marker, button, person, offsetX }
     })
+
+    const refreshLabels = () => {
+      const canvas = map.getCanvas()
+      const width = canvas.clientWidth
+      const height = canvas.clientHeight
+      const zoom = map.getZoom()
+      const horizontalGap = zoom >= 6.4 ? 66 : zoom >= 5.5 ? 86 : 108
+      const verticalGap = zoom >= 6.4 ? 22 : 28
+      const labelBudget = width < 700 ? (zoom >= 6 ? 7 : 5) : zoom >= 6 ? 15 : 10
+      const occupied: Array<{ x: number; y: number }> = []
+      const prioritized = [...markersRef.current].sort((a, b) => {
+        const aScore = Number(a.person.id === selected.id) * 4 + Number(a.person.featured) * 2
+        const bScore = Number(b.person.id === selected.id) * 4 + Number(b.person.featured) * 2
+        return bScore - aScore || a.person.name.localeCompare(b.person.name, 'zh-CN')
+      })
+
+      for (const entry of prioritized) {
+        const point = map.project([entry.person.place.longitude, entry.person.place.latitude])
+        point.x += entry.offsetX
+        const inside = point.x > -25 && point.x < width + 25 && point.y > -25 && point.y < height + 25
+        const collides = occupied.some((used) => Math.abs(used.x - point.x) < horizontalGap && Math.abs(used.y - point.y) < verticalGap)
+        const selectedMarker = entry.person.id === selected.id
+        const show = inside && (selectedMarker || (occupied.length < labelBudget && !collides))
+        entry.button.classList.toggle('label-visible', show)
+        entry.button.dataset.labelVisible = String(show)
+        if (show) occupied.push(point)
+      }
+    }
+    map.on('move', refreshLabels)
+    refreshLabels()
     starsRef.current?.update(people, selected)
+    return () => { map.off('move', refreshLabels) }
   }, [people, ready, selected])
 
   useEffect(() => {
@@ -363,7 +531,7 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
       <div ref={overlayRef} className="three-overlay" />
       {!ready && <div className="map-loading"><span /><strong>正在展开山河星图</strong><small>加载地理与人物坐标…</small></div>}
       <div className="map-period-stamp" aria-live="polite"><span>{period.label}</span><div><strong>{period.dateRange}</strong><small>{period.note}</small></div></div>
-      <div className="map-legend"><span><i className="legend-person" />人物地点</span><span><i className="legend-link" />同域星线</span><span><Sparkles size={12} />Three.js 星图</span></div>
+      <div className="map-legend"><span><i className="legend-person" />人物地点</span><span><i className="legend-link" />关系流光</span><span><Sparkles size={12} />领域星色 · Three.js</span></div>
       {tileWarning && <div className="tile-warning" role="status">地形底图连接不稳定，人物坐标与交互仍可使用。</div>}
       <button className="reset-map" type="button" onClick={() => mapRef.current?.fitBounds(chinaBounds, { padding: 54, duration: 700 })}><RotateCcw size={14} />纵览山河</button>
     </section>

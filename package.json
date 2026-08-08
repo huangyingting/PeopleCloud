@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify:data": "vite-node scripts/verify-people.ts",
+    "verify:sources": "vite-node scripts/verify-source-links.ts",
     "test:e2e": "playwright test",
     "audit:deps": "npm audit",
     "verify": "npm run check && npm run test:e2e",

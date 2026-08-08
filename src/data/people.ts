@@ -1,30 +1,8 @@
-import type { Person, PersonPlace } from '../types'
+import type { Person } from '../types'
+import { additionalPeople } from './additionalPeople'
+import { person, place } from './personRecord'
 
-type PersonInput = Omit<Person, 'aliases' | 'relations' | 'sources'> & {
-  aliases?: string[]
-  relations?: Person['relations']
-  sourceName?: string
-}
-
-const wiki = (name: string) => `https://zh.wikipedia.org/wiki/${encodeURIComponent(name)}`
-
-const person = ({ sourceName, aliases = [], relations = [], ...value }: PersonInput): Person => ({
-  ...value,
-  aliases,
-  relations,
-  sources: [{ title: `${sourceName ?? value.name}条目`, url: wiki(sourceName ?? value.name) }],
-})
-
-const place = (
-  name: string,
-  longitude: number,
-  latitude: number,
-  relation: PersonPlace['relation'],
-  note: string,
-  confidence: PersonPlace['confidence'] = 'high',
-): PersonPlace => ({ name, longitude, latitude, relation, confidence, note })
-
-export const people: Person[] = [
+const corePeople: Person[] = [
   person({ id: 'confucius', name: '孔子', courtesy: '仲尼', aliases: ['孔丘', '至圣先师'], periodId: 'pre-qin', bornYear: -551, diedYear: -479, lifespan: '前551—前479', roles: ['思想家', '教育家'], categories: ['thought'], summary: '儒家学派奠基者，以“仁”与“礼”为核心讨论个人修养、公共秩序和教育，其言行主要见于《论语》。', achievements: ['开创影响深远的儒家思想传统', '整理典籍并推动私学教育'], place: place('曲阜', 116.9865, 35.5809, 'birthplace', '传统记载的出生与长期讲学地区'), relations: [{ targetId: 'mencius', kind: 'influence', label: '思想传统' }], featured: true }),
   person({ id: 'laozi', name: '老子', aliases: ['李耳', '老聃'], periodId: 'pre-qin', bornYear: null, diedYear: null, lifespan: '生卒年不详', roles: ['思想家'], categories: ['thought'], summary: '道家传统的重要奠基人物，《道德经》以“道”与“无为”等观念深刻影响中国哲学、政治思想和艺术。', achievements: ['道家思想的重要源头', '《道德经》的传统作者'], place: place('洛阳', 112.454, 34.6197, 'active', '传统叙事中曾在周都任守藏史；人物生平与活动地点存在争议', 'disputed'), featured: true }),
   person({ id: 'mozi', name: '墨子', aliases: ['墨翟'], periodId: 'pre-qin', bornYear: -468, diedYear: -376, lifespan: '约前468—前376', roles: ['思想家', '工程实践者'], categories: ['thought', 'science'], summary: '墨家学派创始人，倡导兼爱、非攻、尚贤与节用，并在逻辑、光学和守城技术方面留下早期系统讨论。', achievements: ['建立墨家学派', '推动逻辑与自然知识的早期探索'], place: place('滕州', 117.1658, 35.114, 'active', '常见学说所指的鲁国或小邾国活动区域', 'medium') }),
@@ -122,5 +100,7 @@ export const people: Person[] = [
   person({ id: 'wei-yuan', name: '魏源', aliases: [], periodId: 'qing', bornYear: 1794, diedYear: 1857, lifespan: '1794—1857', roles: ['思想家', '史地学者'], categories: ['thought', 'politics'], summary: '晚清思想家与史地学者，编撰《海国图志》，系统介绍海外地理与政情并提出“师夷长技以制夷”。', achievements: ['编撰《海国图志》', '推动近代海外知识传播'], place: place('邵阳', 111.4678, 27.2389, 'birthplace', '湖南邵阳金潭故里'), relations: [{ targetId: 'lin-zexu', kind: 'influence', label: '承接海外资料编纂' }], featured: true }),
   person({ id: 'zhan-tianyou', name: '詹天佑', courtesy: '眷诚', aliases: [], periodId: 'qing', bornYear: 1861, diedYear: 1919, lifespan: '1861—1919', roles: ['铁路工程师'], categories: ['science'], summary: '中国近代铁路工程师，主持京张铁路建设，在复杂地形中完成自主勘测、设计与施工，推动本土工程人才成长。', achievements: ['主持修建京张铁路', '推动中国近代铁路工程自主化'], place: place('广州', 113.2644, 23.1291, 'birthplace', '广东南海县出生地，今属广州'), featured: true }),
 ]
+
+export const people: Person[] = [...corePeople, ...additionalPeople]
 
 export const personById = new Map(people.map((entry) => [entry.id, entry]))

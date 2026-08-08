@@ -8,6 +8,15 @@ describe('exploration helpers', () => {
     expect(searchPeople(people, '天文学家').map((person) => person.id)).toEqual(expect.arrayContaining(['zhang-heng', 'zu-chongzhi', 'guo-shoujing']))
     expect(searchPeople(people, '黄州').map((person) => person.id)).toEqual(['su-shi'])
     expect(searchPeople(people, '辽金西夏').length).toBeGreaterThanOrEqual(4)
+    expect(searchPeople(people, '唐伯虎').map((person) => person.id)).toEqual(['tang-yin'])
+    expect(searchPeople(people, '革命家').map((person) => person.id)).toContain('sun-yat-sen')
+  })
+
+  it('keeps the expanded corpus broad across every period', () => {
+    expect(people).toHaveLength(178)
+    expect(new Set(people.map((person) => person.periodId)).size).toBe(14)
+    expect(peopleForPeriod(people, 'tang', 'all')).toHaveLength(18)
+    expect(peopleForPeriod(people, 'qing', 'all')).toHaveLength(21)
   })
 
   it('combines period and category filters without leaking results', () => {

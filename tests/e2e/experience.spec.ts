@@ -33,7 +33,7 @@ test('desktop exploration connects period, category, map, directory and URL', as
 
   await page.getByRole('button', { name: /^文学/ }).click()
   await expect(page.locator('.map-result-count')).toContainText('文学')
-  await expect(page.locator('.map-person-marker')).toHaveCount(5)
+  await expect.poll(() => page.locator('.map-person-marker').count()).toBeGreaterThanOrEqual(10)
 
   await page.getByRole('button', { name: /名录/ }).last().click()
   const directory = page.getByRole('dialog', { name: '名人名录' })
@@ -59,6 +59,36 @@ test('all fourteen periods expose a meaningful map sample', async ({ page }) => 
     await expect(page.locator('.map-person-marker')).not.toHaveCount(0)
     expect(Number(accessibleName?.match(/收录 (\d+) 人/)?.[1] ?? 0)).toBeGreaterThanOrEqual(4)
   }
+})
+
+test('expanded constellations stay legible and expose animated relation metadata', async ({ page }) => {
+  await enter(page)
+  const allMarkers = page.locator('.map-person-marker')
+  const visibleLabels = page.locator('.map-person-marker[data-label-visible="true"]')
+  await expect(allMarkers).toHaveCount(18)
+  await expect.poll(() => visibleLabels.count()).toBeGreaterThan(1)
+  expect(await visibleLabels.count()).toBeLessThan(await allMarkers.count())
+
+  const constellation = page.locator('.constellation-canvas')
+  await expect(constellation).toHaveAttribute('data-people-count', '18')
+  await expect(constellation).toHaveAttribute('data-motion', 'animated')
+  expect(Number(await constellation.getAttribute('data-connection-count'))).toBeGreaterThan(0)
+
+  await page.getByRole('button', { name: /名录/ }).last().click()
+  const directory = page.getByRole('dialog', { name: '名人名录' })
+  await directory.getByRole('searchbox', { name: '搜索人物' }).fill('孙中山')
+  await directory.getByRole('button', { name: /孙中山/ }).click()
+  await expect(page.locator('.person-panel')).toHaveAttribute('data-person-id', 'sun-yat-sen')
+  await expect(page).toHaveURL(/period=qing&person=sun-yat-sen/)
+})
+
+test('reduced motion keeps the constellation informative but static', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await enter(page)
+  const constellation = page.locator('.constellation-canvas')
+  await expect(constellation).toHaveAttribute('data-people-count', '18')
+  await expect(constellation).toHaveAttribute('data-motion', 'reduced')
+  expect(Number(await constellation.getAttribute('data-connection-count'))).toBeGreaterThan(0)
 })
 
 test('URL state restores a selected person and keyboard shortcut opens a trapped directory', async ({ page }) => {

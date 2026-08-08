@@ -7,8 +7,26 @@ const ids = new Set<string>()
 const relationIds = new Set(people.map((person) => person.id))
 const validPeriodIds = new Set(periods.map((period) => period.id))
 const validCategories = new Set(categories.map((category) => category.id))
+const minimumPeriodCoverage = {
+  'pre-qin': 12,
+  qin: 8,
+  han: 14,
+  'three-kingdoms': 12,
+  jin: 10,
+  'southern-northern': 11,
+  sui: 8,
+  tang: 18,
+  'five-dynasties': 8,
+  song: 18,
+  'liao-jin-xixia': 8,
+  yuan: 12,
+  ming: 18,
+  qing: 20,
+} as const
 
 const fail = (message: string) => failures.push(message)
+
+if (people.length < 175) fail(`expanded corpus regressed to ${people.length} people; expected at least 175`)
 
 for (const person of people) {
   if (!/^[a-z0-9-]+$/.test(person.id)) fail(`${person.name}: id must be kebab-case ASCII`)
@@ -41,7 +59,8 @@ for (const person of people) {
 
 for (const period of periods) {
   const entries = people.filter((person) => person.periodId === period.id)
-  if (entries.length < 4) fail(`${period.label}: only ${entries.length} people, minimum is 4`)
+  const minimum = minimumPeriodCoverage[period.id]
+  if (entries.length < minimum) fail(`${period.label}: only ${entries.length} people, expanded minimum is ${minimum}`)
   if (new Set(entries.flatMap((person) => person.categories)).size < 2) fail(`${period.label}: needs at least two represented fields`)
 }
 
@@ -63,4 +82,5 @@ console.log(JSON.stringify({
   sourcedPeople: people.filter((person) => person.sources.length > 0).length,
   disputedPlaces: people.filter((person) => person.place.confidence === 'disputed').length,
   periodCoverage: Object.fromEntries(periods.map((period) => [period.label, people.filter((person) => person.periodId === period.id).length])),
+  categoryCoverage: Object.fromEntries(categories.map((category) => [category.label, people.filter((person) => person.categories.includes(category.id)).length])),
 }, null, 2))
