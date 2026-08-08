@@ -1,0 +1,12 @@
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import '@chinese-fonts/zqfs/dist/ZhuqueFangsong-Regular/result.css'
+import App from './App'
+import { AppBoundary } from './components/AppBoundary'
+import './styles.css'
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <AppBoundary><App /></AppBoundary>
+  </StrictMode>,
+)

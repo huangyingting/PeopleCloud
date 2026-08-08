@@ -1,0 +1,51 @@
+{
+  "name": "people-cloud",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify:data": "vite-node scripts/verify-people.ts",
+    "test:e2e": "playwright test",
+    "audit:deps": "npm audit",
+    "verify": "npm run check && npm run test:e2e",
+    "check": "npm run typecheck && npm run lint && npm test && npm run verify:data && npm run build"
+  },
+  "dependencies": {
+    "@chinese-fonts/zqfs": "^3.0.0",
+    "lucide-react": "^0.468.0",
+    "maplibre-gl": "^5.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "three": "^0.172.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@eslint/js": "^9.17.0",
+    "@playwright/test": "^1.49.1",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "@types/three": "^0.172.0",
+    "@vitejs/plugin-react": "^6.0.5",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "globals": "^15.14.0",
+    "jsdom": "^25.0.1",
+    "typescript": "~5.7.2",
+    "typescript-eslint": "^8.18.2",
+    "vite": "^8.2.1",
+    "vite-node": "^6.0.0",
+    "vitest": "^4.1.10"
+  }
+}

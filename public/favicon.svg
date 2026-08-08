@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="8" fill="#07100f"/>
+  <rect x="10" y="9" width="44" height="46" rx="2" fill="#9a3f32" stroke="#d8b56d" stroke-width="2"/>
+  <rect x="14" y="13" width="36" height="38" fill="none" stroke="#6c291f"/>
+  <text x="32" y="43" text-anchor="middle" font-family="serif" font-size="30" fill="#f2d59e">人</text>
+</svg>
