@@ -34,7 +34,7 @@ describe('PeopleCloud application', () => {
     render(<App />)
     await user.click(screen.getByRole('button', { name: '进入星图' }))
     const filters = screen.getByRole('region', { name: '测试人物地图' }).parentElement!
-    await user.click(screen.getByRole('button', { name: /隋，581—618/ }))
+    await user.click(screen.getByRole('button', { name: /秦，前221—前206/ }))
     const medicine = within(filters).getByRole('button', { name: /医学/ })
     expect(medicine).toBeDisabled()
     await user.click(screen.getByRole('button', { name: /唐，618—907/ }))

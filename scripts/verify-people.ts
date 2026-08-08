@@ -8,25 +8,25 @@ const relationIds = new Set(people.map((person) => person.id))
 const validPeriodIds = new Set(periods.map((period) => period.id))
 const validCategories = new Set(categories.map((category) => category.id))
 const minimumPeriodCoverage = {
-  'pre-qin': 12,
-  qin: 8,
-  han: 14,
-  'three-kingdoms': 12,
-  jin: 10,
-  'southern-northern': 11,
-  sui: 8,
-  tang: 18,
-  'five-dynasties': 8,
-  song: 18,
-  'liao-jin-xixia': 8,
-  yuan: 12,
-  ming: 18,
-  qing: 20,
+  'pre-qin': 17,
+  qin: 13,
+  han: 19,
+  'three-kingdoms': 17,
+  jin: 15,
+  'southern-northern': 16,
+  sui: 13,
+  tang: 23,
+  'five-dynasties': 13,
+  song: 23,
+  'liao-jin-xixia': 13,
+  yuan: 17,
+  ming: 23,
+  qing: 26,
 } as const
 
 const fail = (message: string) => failures.push(message)
 
-if (people.length < 175) fail(`expanded corpus regressed to ${people.length} people; expected at least 175`)
+if (people.length < 248) fail(`expanded corpus regressed to ${people.length} people; expected at least 248`)
 
 for (const person of people) {
   if (!/^[a-z0-9-]+$/.test(person.id)) fail(`${person.name}: id must be kebab-case ASCII`)

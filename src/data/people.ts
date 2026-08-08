@@ -1,5 +1,6 @@
 import type { Person } from '../types'
 import { additionalPeople } from './additionalPeople'
+import { furtherPeople } from './furtherPeople'
 import { person, place } from './personRecord'
 
 const corePeople: Person[] = [
@@ -101,6 +102,6 @@ const corePeople: Person[] = [
   person({ id: 'zhan-tianyou', name: '詹天佑', courtesy: '眷诚', aliases: [], periodId: 'qing', bornYear: 1861, diedYear: 1919, lifespan: '1861—1919', roles: ['铁路工程师'], categories: ['science'], summary: '中国近代铁路工程师，主持京张铁路建设，在复杂地形中完成自主勘测、设计与施工，推动本土工程人才成长。', achievements: ['主持修建京张铁路', '推动中国近代铁路工程自主化'], place: place('广州', 113.2644, 23.1291, 'birthplace', '广东南海县出生地，今属广州'), featured: true }),
 ]
 
-export const people: Person[] = [...corePeople, ...additionalPeople]
+export const people: Person[] = [...corePeople, ...additionalPeople, ...furtherPeople]
 
 export const personById = new Map(people.map((entry) => [entry.id, entry]))

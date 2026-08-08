@@ -10,13 +10,17 @@ describe('exploration helpers', () => {
     expect(searchPeople(people, '辽金西夏').length).toBeGreaterThanOrEqual(4)
     expect(searchPeople(people, '唐伯虎').map((person) => person.id)).toEqual(['tang-yin'])
     expect(searchPeople(people, '革命家').map((person) => person.id)).toContain('sun-yat-sen')
+    expect(searchPeople(people, '兵仙').map((person) => person.id)).toEqual(['han-xin'])
+    expect(searchPeople(people, '鉴湖女侠').map((person) => person.id)).toEqual(['qiu-jin'])
   })
 
   it('keeps the expanded corpus broad across every period', () => {
-    expect(people).toHaveLength(178)
+    expect(people).toHaveLength(248)
     expect(new Set(people.map((person) => person.periodId)).size).toBe(14)
-    expect(peopleForPeriod(people, 'tang', 'all')).toHaveLength(18)
-    expect(peopleForPeriod(people, 'qing', 'all')).toHaveLength(21)
+    expect(peopleForPeriod(people, 'tang', 'all')).toHaveLength(23)
+    expect(peopleForPeriod(people, 'qing', 'all')).toHaveLength(26)
+    const periodIds = Array.from(new Set(people.map((person) => person.periodId)))
+    expect(Math.min(...periodIds.map((periodId) => peopleForPeriod(people, periodId, 'all').length))).toBeGreaterThanOrEqual(13)
   })
 
   it('combines period and category filters without leaking results', () => {

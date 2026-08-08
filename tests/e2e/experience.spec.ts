@@ -56,8 +56,9 @@ test('all fourteen periods expose a meaningful map sample', async ({ page }) => 
     const accessibleName = await button.getAttribute('aria-label')
     await button.click()
     await expect(button).toHaveAttribute('aria-current', 'true')
-    await expect(page.locator('.map-person-marker')).not.toHaveCount(0)
-    expect(Number(accessibleName?.match(/收录 (\d+) 人/)?.[1] ?? 0)).toBeGreaterThanOrEqual(4)
+    const expectedCount = Number(accessibleName?.match(/收录 (\d+) 人/)?.[1] ?? 0)
+    expect(expectedCount).toBeGreaterThanOrEqual(13)
+    await expect(page.locator('.map-person-marker')).toHaveCount(expectedCount)
   }
 })
 
@@ -65,12 +66,12 @@ test('expanded constellations stay legible and expose animated relation metadata
   await enter(page)
   const allMarkers = page.locator('.map-person-marker')
   const visibleLabels = page.locator('.map-person-marker[data-label-visible="true"]')
-  await expect(allMarkers).toHaveCount(18)
+  await expect(allMarkers).toHaveCount(23)
   await expect.poll(() => visibleLabels.count()).toBeGreaterThan(1)
   expect(await visibleLabels.count()).toBeLessThan(await allMarkers.count())
 
   const constellation = page.locator('.constellation-canvas')
-  await expect(constellation).toHaveAttribute('data-people-count', '18')
+  await expect(constellation).toHaveAttribute('data-people-count', '23')
   await expect(constellation).toHaveAttribute('data-motion', 'animated')
   expect(Number(await constellation.getAttribute('data-connection-count'))).toBeGreaterThan(0)
 
@@ -86,7 +87,7 @@ test('reduced motion keeps the constellation informative but static', async ({ p
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await enter(page)
   const constellation = page.locator('.constellation-canvas')
-  await expect(constellation).toHaveAttribute('data-people-count', '18')
+  await expect(constellation).toHaveAttribute('data-people-count', '23')
   await expect(constellation).toHaveAttribute('data-motion', 'reduced')
   expect(Number(await constellation.getAttribute('data-connection-count'))).toBeGreaterThan(0)
 })
