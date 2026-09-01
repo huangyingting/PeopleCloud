@@ -1,4 +1,5 @@
-import { ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Columns3, Dices, MapPin, Route, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, ChevronDown, ChevronUp, Columns3, Dices, MapPin, Route, X } from 'lucide-react'
+import { useState, type RefObject } from 'react'
 import { categoryLabel } from '../data/categories'
 import { periodById } from '../data/periods'
 import { confidenceLabel, placeRelationLabel, relatedPeople } from '../lib/explore'
@@ -13,7 +14,7 @@ interface PersonPanelProps {
   onNavigate: (direction: -1 | 1) => void
   onSurprise: () => void
   onOpenCompare: () => void
-  compareButtonRef: React.RefObject<HTMLButtonElement | null>
+  compareButtonRef: RefObject<HTMLButtonElement | null>
   onClose: () => void
 }
 
@@ -21,10 +22,13 @@ export function PersonPanel({ person, people, visiblePeople, visited, onSelect, 
   const period = periodById.get(person.periodId)!
   const related = relatedPeople(person, people)
   const visibleIndex = Math.max(0, visiblePeople.findIndex((entry) => entry.id === person.id))
+  const [expanded, setExpanded] = useState(false)
 
   return (
-    <aside className="person-panel" aria-label={`${person.name}人物详情`} data-person-id={person.id}>
-      <div className="panel-grab" aria-hidden="true" />
+    <aside className={expanded ? 'person-panel expanded' : 'person-panel'} aria-label={`${person.name}人物详情`} data-person-id={person.id}>
+      <button className="panel-grab" type="button" onClick={() => setExpanded((current) => !current)} aria-label={expanded ? '收起人物详情' : '展开人物详情'} aria-expanded={expanded}>
+        <span aria-hidden="true" />{expanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+      </button>
       <button className="icon-button panel-close" type="button" onClick={onClose} aria-label="关闭人物详情"><X size={18} /></button>
       <div className="person-kicker"><span style={{ background: period.accent }} />{period.label} · {period.dateRange}</div>
       <div className="person-navigator" aria-label="人物漫游导航">

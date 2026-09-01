@@ -87,16 +87,36 @@ test('map previews, view controls and person trail support guided exploration', 
   await page.goto('/?period=tang&person=li-bai')
   await expect(page.locator('.map-person-marker').first()).toBeVisible({ timeout: 20_000 })
 
+  const dimensions = await page.evaluate(() => ({
+    map: document.querySelector('.map-canvas')?.getBoundingClientRect().height,
+    workspace: document.querySelector('.workspace')?.getBoundingClientRect().height,
+  }))
+  expect(dimensions.map).toBeGreaterThan(0)
+  expect(Math.abs((dimensions.map ?? 0) - (dimensions.workspace ?? 0))).toBeLessThanOrEqual(1)
+
   const marker = page.locator('.map-person-marker:not(.selected)').first()
+  const clickedPersonId = await marker.getAttribute('data-person-id')
   await marker.focus()
   const preview = page.locator('.map-person-preview')
   await expect(preview).toBeVisible()
   await expect(preview).toContainText('点击聚焦')
+  await marker.click()
+  await expect(page.locator('.person-panel')).toHaveAttribute('data-person-id', clickedPersonId!)
+
+  const selectedMarker = page.locator('.map-person-marker.selected')
+  await selectedMarker.focus()
+  await page.keyboard.press('ArrowRight')
+  const keyboardTarget = await page.evaluate(() => document.activeElement?.getAttribute('data-person-id'))
+  expect(keyboardTarget).toBeTruthy()
+  expect(keyboardTarget).not.toBe(clickedPersonId)
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.person-panel')).toHaveAttribute('data-person-id', keyboardTarget!)
 
   await page.getByRole('button', { name: /时代全景/ }).click()
   await page.getByRole('button', { name: /聚焦人物/ }).click()
+  const beforeNext = await page.locator('.person-panel').getAttribute('data-person-id')
   await page.getByRole('button', { name: '下一位人物' }).click()
-  await expect(page.locator('.person-panel')).not.toHaveAttribute('data-person-id', 'li-bai')
+  await expect(page.locator('.person-panel')).not.toHaveAttribute('data-person-id', beforeNext!)
   const trail = page.locator('.journey-section')
   await expect(trail).toContainText('李白')
   await trail.getByRole('button', { name: /李白/ }).click()
@@ -165,6 +185,14 @@ test('mobile sheet remains readable with no horizontal overflow', async ({ page 
   await expect(panel).toBeVisible()
   const box = await panel.boundingBox()
   expect(box?.height ?? 9999).toBeLessThanOrEqual(510)
+  expect(box?.height ?? 9999).toBeLessThan(844 * 0.5)
+
+  const panelGrab = panel.getByRole('button', { name: '展开人物详情' })
+  await panelGrab.click()
+  await expect(panel.getByRole('button', { name: '收起人物详情' })).toHaveAttribute('aria-expanded', 'true')
+  const expandedBox = await panel.boundingBox()
+  expect(expandedBox?.height ?? 0).toBeGreaterThan(box?.height ?? 9999)
+  await panel.getByRole('button', { name: '收起人物详情' }).click()
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
   expect(overflow).toBeLessThanOrEqual(1)

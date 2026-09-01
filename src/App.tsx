@@ -245,6 +245,7 @@ export default function App() {
         <div className="map-result-count" aria-live="polite">{category === 'all' ? period.label : categoryLabel[category]} · {visiblePeople.length} 位人物</div>
         {!panelOpen && <button className="reopen-panel" type="button" onClick={() => setPanelOpen(true)}><span>{selected.name}</span><small>打开人物卷轴</small><ChevronRight /></button>}
         {panelOpen && <PersonPanel
+          key={selected.id}
           person={selected}
           people={people}
           visiblePeople={visiblePeople}

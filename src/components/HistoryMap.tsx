@@ -37,11 +37,11 @@ const mapStyle: StyleSpecification = {
       type: 'raster',
       source: 'relief',
       paint: {
-        'raster-opacity': 0.84,
-        'raster-saturation': -0.7,
-        'raster-contrast': 0.35,
-        'raster-brightness-min': 0.03,
-        'raster-brightness-max': 0.42,
+        'raster-opacity': 0.76,
+        'raster-saturation': -0.88,
+        'raster-contrast': 0.48,
+        'raster-brightness-min': 0,
+        'raster-brightness-max': 0.27,
         'raster-hue-rotate': 22,
         'raster-fade-duration': 180,
       },
@@ -416,13 +416,19 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
       })
       map.addControl(new NavigationControl({ showCompass: true, visualizePitch: true }), 'bottom-left')
       map.addControl(new AttributionControl({ compact: true }), 'bottom-right')
-      map.once('load', () => {
+      let initialized = false
+      const initializeInteraction = () => {
+        if (initialized) return
+        initialized = true
+        map?.resize()
         setReady(true)
         if (map && overlayRef.current) {
           starsRef.current = new ConstellationOverlay(map, overlayRef.current)
           starsRef.current.update(peopleRef.current, selectedRef.current)
         }
-      })
+      }
+      map.once('style.load', initializeInteraction)
+      map.once('load', initializeInteraction)
       let sourceErrors = 0
       map.on('error', (event) => {
         if (String(event.error?.message ?? '').toLowerCase().includes('webgl')) setFatalError(true)
@@ -456,13 +462,31 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
       button.type = 'button'
       button.className = person.id === selected.id ? 'map-person-marker selected' : 'map-person-marker'
       button.dataset.personId = person.id
+      button.tabIndex = person.id === selected.id ? 0 : -1
+      if (person.id === selected.id) button.setAttribute('aria-current', 'true')
       button.setAttribute('aria-label', `${person.name}，${person.roles.join('、')}，${person.place.name}`)
+      button.setAttribute('aria-describedby', 'map-keyboard-help')
+      button.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter')
       button.innerHTML = `<span class="marker-core" aria-hidden="true"></span><span class="marker-label">${person.name}</span>`
       button.addEventListener('click', () => selectRef.current(person))
       button.addEventListener('mouseenter', () => setHovered(person))
       button.addEventListener('mouseleave', () => setHovered((current) => current?.id === person.id ? null : current))
       button.addEventListener('focus', () => setHovered(person))
       button.addEventListener('blur', () => setHovered((current) => current?.id === person.id ? null : current))
+      button.addEventListener('keydown', (event) => {
+        const entries = markersRef.current
+        const currentIndex = entries.findIndex((entry) => entry.person.id === person.id)
+        if (currentIndex < 0 || !entries.length) return
+        let nextIndex: number | null = null
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + entries.length) % entries.length
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % entries.length
+        if (event.key === 'Home') nextIndex = 0
+        if (event.key === 'End') nextIndex = entries.length - 1
+        if (nextIndex === null) return
+        event.preventDefault()
+        entries.forEach((entry, index) => { entry.button.tabIndex = index === nextIndex ? 0 : -1 })
+        entries[nextIndex]?.button.focus()
+      })
       const group = groups.get(`${person.place.longitude.toFixed(4)},${person.place.latitude.toFixed(4)}`) ?? [person]
       const index = group.findIndex((entry) => entry.id === person.id)
       const offsetX = (index - (group.length - 1) / 2) * 38
@@ -552,8 +576,9 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
     ]
     const compact = window.matchMedia('(max-width: 700px)').matches
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const mobilePanelInset = Math.min(window.innerHeight * 0.42, 390) + 28
     map.fitBounds(bounds, {
-      padding: compact ? { top: 125, right: 35, bottom: 250, left: 35 } : { top: 110, right: 430, bottom: 90, left: 80 },
+      padding: compact ? { top: 125, right: 35, bottom: mobilePanelInset, left: 35 } : { top: 110, right: 410, bottom: 90, left: 80 },
       maxZoom: 5.7,
       pitch: compact ? 18 : 32,
       bearing: 0,
@@ -587,6 +612,7 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
         <button type="button" onClick={focusSelected}><Focus size={14} /><span>聚焦人物</span></button>
         <button type="button" onClick={showPeriodOverview}><Maximize2 size={14} /><span>时代全景</span></button>
       </div>
+      <p className="map-keyboard-help" id="map-keyboard-help">Tab 进入地图 · 方向键切换人物 · Enter 打开</p>
     </section>
   )
 }
