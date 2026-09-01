@@ -3,11 +3,11 @@
   "short_name": "人间星图",
   "description": "在地图与时间中探索中国历代名人、生平与文化足迹。",
   "lang": "zh-CN",
-  "start_url": "/",
+  "start_url": ".",
   "display": "standalone",
   "background_color": "#07100f",
   "theme_color": "#07100f",
   "icons": [
-    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }
