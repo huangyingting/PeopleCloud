@@ -22,4 +22,6 @@ npm run verify:sources
 
 地图会按屏幕空间自动避让人物标签，但不会移除人物按钮；放大、悬停、键盘聚焦或选择人物时都能看到相应标签。开启系统“减少动态效果”后，Three.js 关系流光和持续旋转会停在静态状态。
 
-产品构思、交互与验收标准见 [docs/product-design.md](docs/product-design.md)，数据口径见 [docs/data-methodology.md](docs/data-methodology.md)，技术架构见 [docs/architecture.md](docs/architecture.md)。
+探索工作台支持标记预览、人物聚焦与时代全景、上一位/偶遇/下一位漫游、最近浏览足迹，以及跨时代人物对照。人物对照可检索第二位人物，并从对照结果直接回到星图继续探索。
+
+产品构思与基础验收标准见 [docs/product-design.md](docs/product-design.md)，本轮 UI 与互动升级见 [docs/ui-interaction-refresh.md](docs/ui-interaction-refresh.md)，数据口径见 [docs/data-methodology.md](docs/data-methodology.md)，技术架构见 [docs/architecture.md](docs/architecture.md)。

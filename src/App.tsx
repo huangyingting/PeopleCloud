@@ -6,6 +6,7 @@ import { periodById, periods } from './data/periods'
 import { peopleForPeriod } from './lib/explore'
 import type { CategoryId, Person, PeriodId } from './types'
 import { Directory } from './components/Directory'
+import { CompareDialog } from './components/CompareDialog'
 import { FocusTrap } from './components/FocusTrap'
 import { PeriodTimeline } from './components/PeriodTimeline'
 import { PersonPanel } from './components/PersonPanel'
@@ -44,8 +45,9 @@ function writeUrl(person: Person, category: CategoryId | 'all', mode: 'push' | '
   window.history[mode === 'push' ? 'pushState' : 'replaceState']({}, '', nextUrl)
 }
 
-function Intro({ onEnter }: { onEnter: () => void }) {
+function Intro({ onEnter }: { onEnter: (person?: Person) => void }) {
   const categoryCount = new Set(people.flatMap((person) => person.categories)).size
+  const featuredPerson = personById.get('li-bai')!
   return (
     <main className="intro" id="main-content">
       <div className="intro-stars" aria-hidden="true">{Array.from({ length: 16 }, (_, index) => <i key={index} style={{ '--star': index } as React.CSSProperties} />)}</div>
@@ -57,19 +59,20 @@ function Intro({ onEnter }: { onEnter: () => void }) {
         <div className="hero-eyebrow"><Sparkles size={14} /> 一部可以漫游的中国人物史</div>
         <h1>群星落人间，<br /><em>山河见其生。</em></h1>
         <p>从先秦诸子到晚清工程师，沿时间与地理坐标，遇见改变思想、文学、科技与政治的人。</p>
-        <button className="enter-button" type="button" onClick={onEnter}><span>进入星图</span><ChevronRight /><i aria-hidden="true" /></button>
+        <button className="enter-button" type="button" onClick={() => onEnter()}><span>进入星图</span><ChevronRight /><i aria-hidden="true" /></button>
         <div className="hero-stats" aria-label="语料统计">
           <div><strong>{people.length}</strong><span>位人物</span></div>
           <div><strong>{periods.length}</strong><span>个时期</span></div>
           <div><strong>{categoryCount}</strong><span>个领域</span></div>
         </div>
       </section>
-      <aside className="hero-card" aria-label="今日人物">
+      <aside className="hero-card">
         <span>星图一隅 · 唐</span>
         <div className="hero-card-orbit"><i /><b>李</b></div>
         <h2>李白</h2><p>诗人 · 701—762</p>
         <blockquote>“大鹏一日同风起，扶摇直上九万里。”</blockquote>
         <small>坐标：江油 · 成长与活动地</small>
+        <button className="hero-card-action" type="button" onClick={() => onEnter(featuredPerson)} aria-label="从李白开始探索">从此人开始 <ChevronRight size={13} /></button>
       </aside>
       <section id="method" className="intro-method">
         <span><Map size={19} /></span><div><strong>坐标是一种历史关系</strong><p>每个地点都标明出生、籍贯、活动、任职或纪念等关系；有争议时如实标注，不把文化锚点伪装成确定事实。</p></div>
@@ -106,21 +109,29 @@ export default function App() {
   const [category, setCategory] = useState<CategoryId | 'all'>(initial.category)
   const [directoryOpen, setDirectoryOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
   const [panelOpen, setPanelOpen] = useState(true)
+  const [visited, setVisited] = useState<Person[]>(initial.entered ? [initial.person] : [])
   const directoryButtonRef = useRef<HTMLButtonElement>(null)
   const aboutButtonRef = useRef<HTMLButtonElement>(null)
+  const compareButtonRef = useRef<HTMLButtonElement>(null)
   const period = periodById.get(periodId)!
   const visiblePeople = useMemo(() => peopleForPeriod(people, periodId, category), [periodId, category])
+
+  const rememberPerson = useCallback((person: Person) => {
+    setVisited((current) => [...current.filter((entry) => entry.id !== person.id), person].slice(-6))
+  }, [])
 
   const selectPerson = useCallback((person: Person) => {
     const nextCategory = category === 'all' || person.categories.includes(category) ? category : 'all'
     setPeriodId(person.periodId)
     setCategory(nextCategory)
     setSelected(person)
+    rememberPerson(person)
     setPanelOpen(true)
     setDirectoryOpen(false)
     writeUrl(person, nextCategory)
-  }, [category])
+  }, [category, rememberPerson])
 
   const selectPeriod = useCallback((nextPeriod: PeriodId) => {
     const sameCategory = peopleForPeriod(people, nextPeriod, category)
@@ -130,9 +141,10 @@ export default function App() {
     setCategory(nextCategory)
     const nextPerson = candidates.find((person) => person.featured) ?? candidates[0]
     setSelected(nextPerson)
+    rememberPerson(nextPerson)
     setPanelOpen(true)
     writeUrl(nextPerson, nextCategory)
-  }, [category])
+  }, [category, rememberPerson])
 
   const selectCategory = (nextCategory: CategoryId | 'all') => {
     const candidates = peopleForPeriod(people, periodId, nextCategory)
@@ -140,6 +152,7 @@ export default function App() {
     setCategory(nextCategory)
     const nextPerson = candidates.some((person) => person.id === selected.id) ? selected : candidates.find((person) => person.featured) ?? candidates[0]
     setSelected(nextPerson)
+    rememberPerson(nextPerson)
     setPanelOpen(true)
     writeUrl(nextPerson, nextCategory)
   }
@@ -150,12 +163,39 @@ export default function App() {
       setEntered(state.entered)
       setPeriodId(state.periodId)
       setSelected(state.person)
+      rememberPerson(state.person)
       setCategory(state.category)
       setPanelOpen(true)
     }
     window.addEventListener('popstate', restore)
     return () => window.removeEventListener('popstate', restore)
-  }, [])
+  }, [rememberPerson])
+
+  const navigateVisible = useCallback((direction: -1 | 1) => {
+    const index = visiblePeople.findIndex((person) => person.id === selected.id)
+    const nextIndex = (Math.max(index, 0) + direction + visiblePeople.length) % visiblePeople.length
+    const nextPerson = visiblePeople[nextIndex]
+    if (nextPerson) selectPerson(nextPerson)
+  }, [selectPerson, selected.id, visiblePeople])
+
+  const surpriseMe = useCallback(() => {
+    if (visiblePeople.length < 2) return
+    const currentIndex = visiblePeople.findIndex((person) => person.id === selected.id)
+    const jump = 1 + Math.floor(Math.random() * (visiblePeople.length - 1))
+    selectPerson(visiblePeople[(Math.max(currentIndex, 0) + jump) % visiblePeople.length])
+  }, [selectPerson, selected.id, visiblePeople])
+
+  const enterExperience = useCallback((person?: Person) => {
+    const nextPerson = person ?? selected
+    if (person) {
+      setPeriodId(person.periodId)
+      setCategory('all')
+      setSelected(person)
+    }
+    rememberPerson(nextPerson)
+    setEntered(true)
+    writeUrl(nextPerson, person ? 'all' : category, 'replace')
+  }, [category, rememberPerson, selected])
 
   useEffect(() => {
     if (!entered) return
@@ -169,11 +209,13 @@ export default function App() {
     return () => window.removeEventListener('keydown', openDirectory)
   }, [entered])
 
-  if (!entered) return <Intro onEnter={() => { setEntered(true); writeUrl(selected, category, 'replace') }} />
+  if (!entered) return <Intro onEnter={enterExperience} />
+
+  const modalOpen = directoryOpen || aboutOpen || compareOpen
 
   return (
     <main className="app-shell" id="main-content" style={{ '--active-accent': period.accent } as React.CSSProperties}>
-      <header className="topbar" inert={directoryOpen || aboutOpen ? true : undefined} aria-hidden={directoryOpen || aboutOpen ? true : undefined}>
+      <header className="topbar" inert={modalOpen ? true : undefined} aria-hidden={modalOpen ? true : undefined}>
         <button className="brand brand-button" type="button" onClick={() => setEntered(false)} aria-label="返回人间星图首页">
           <span className="brand-seal">人</span><span><strong>人间星图</strong><small>PEOPLE CLOUD</small></span>
         </button>
@@ -185,11 +227,11 @@ export default function App() {
         </div>
       </header>
 
-      <div inert={directoryOpen || aboutOpen ? true : undefined} aria-hidden={directoryOpen || aboutOpen ? true : undefined}>
+      <div inert={modalOpen ? true : undefined} aria-hidden={modalOpen ? true : undefined}>
         <PeriodTimeline value={periodId} onChange={selectPeriod} />
       </div>
 
-      <section className="workspace" inert={directoryOpen || aboutOpen ? true : undefined} aria-hidden={directoryOpen || aboutOpen ? true : undefined}>
+      <section className="workspace" inert={modalOpen ? true : undefined} aria-hidden={modalOpen ? true : undefined}>
         <Suspense fallback={<div className="map-suspense"><span /><p>星图组件载入中…</p></div>}>
           <HistoryMap people={visiblePeople} selected={selected} onSelect={selectPerson} />
         </Suspense>
@@ -202,11 +244,23 @@ export default function App() {
         </div>
         <div className="map-result-count" aria-live="polite">{category === 'all' ? period.label : categoryLabel[category]} · {visiblePeople.length} 位人物</div>
         {!panelOpen && <button className="reopen-panel" type="button" onClick={() => setPanelOpen(true)}><span>{selected.name}</span><small>打开人物卷轴</small><ChevronRight /></button>}
-        {panelOpen && <PersonPanel person={selected} people={people} onSelect={selectPerson} onClose={() => setPanelOpen(false)} />}
+        {panelOpen && <PersonPanel
+          person={selected}
+          people={people}
+          visiblePeople={visiblePeople}
+          visited={visited}
+          onSelect={selectPerson}
+          onNavigate={navigateVisible}
+          onSurprise={surpriseMe}
+          onOpenCompare={() => setCompareOpen(true)}
+          compareButtonRef={compareButtonRef}
+          onClose={() => setPanelOpen(false)}
+        />}
       </section>
 
       {directoryOpen && <Directory onClose={() => setDirectoryOpen(false)} onSelect={selectPerson} returnFocusRef={directoryButtonRef} />}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} returnFocusRef={aboutButtonRef} />}
+      {compareOpen && <CompareDialog person={selected} people={people} onSelect={selectPerson} onClose={() => setCompareOpen(false)} returnFocusRef={compareButtonRef} />}
     </main>
   )
 }

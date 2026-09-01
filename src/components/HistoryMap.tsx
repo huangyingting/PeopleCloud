@@ -9,8 +9,10 @@ import {
 import 'maplibre-gl/dist/maplibre-gl.css'
 import * as THREE from 'three'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { MapPin, RotateCcw, Sparkles } from 'lucide-react'
+import { Focus, MapPin, Maximize2, Sparkles } from 'lucide-react'
+import { categoryLabel } from '../data/categories'
 import { periodById } from '../data/periods'
+import { placeRelationLabel } from '../lib/explore'
 import type { CategoryId, Person } from '../types'
 
 const chinaBounds: [[number, number], [number, number]] = [[72, 16], [136, 54]]
@@ -384,6 +386,7 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
   const [ready, setReady] = useState(false)
   const [fatalError, setFatalError] = useState(!supportsWebGl())
   const [tileWarning, setTileWarning] = useState(false)
+  const [hovered, setHovered] = useState<Person | null>(null)
   const period = periodById.get(selected.periodId)!
   const selectedRef = useRef(selected)
   const peopleRef = useRef(people)
@@ -456,6 +459,10 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
       button.setAttribute('aria-label', `${person.name}，${person.roles.join('、')}，${person.place.name}`)
       button.innerHTML = `<span class="marker-core" aria-hidden="true"></span><span class="marker-label">${person.name}</span>`
       button.addEventListener('click', () => selectRef.current(person))
+      button.addEventListener('mouseenter', () => setHovered(person))
+      button.addEventListener('mouseleave', () => setHovered((current) => current?.id === person.id ? null : current))
+      button.addEventListener('focus', () => setHovered(person))
+      button.addEventListener('blur', () => setHovered((current) => current?.id === person.id ? null : current))
       const group = groups.get(`${person.place.longitude.toFixed(4)},${person.place.latitude.toFixed(4)}`) ?? [person]
       const index = group.findIndex((entry) => entry.id === person.id)
       const offsetX = (index - (group.length - 1) / 2) * 38
@@ -499,6 +506,10 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
   }, [people, ready, selected])
 
   useEffect(() => {
+    if (hovered && !people.some((person) => person.id === hovered.id)) setHovered(null)
+  }, [hovered, people])
+
+  useEffect(() => {
     const map = mapRef.current
     if (!map || !ready) return
     const compact = window.matchMedia('(max-width: 700px)').matches
@@ -516,6 +527,40 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
 
   const fallbackPlaces = useMemo(() => [...people].sort((a, b) => a.place.name.localeCompare(b.place.name, 'zh-CN')), [people])
 
+  const focusSelected = () => {
+    const compact = window.matchMedia('(max-width: 700px)').matches
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    mapRef.current?.flyTo({
+      center: [selected.place.longitude, selected.place.latitude],
+      zoom: compact ? 5.1 : 5.4,
+      pitch: compact ? 28 : 44,
+      bearing: compact ? 0 : -7,
+      offset: compact ? [0, -80] : [-110, 0],
+      duration: reduced ? 0 : 800,
+      essential: false,
+    })
+  }
+
+  const showPeriodOverview = () => {
+    const map = mapRef.current
+    if (!map || !people.length) return
+    const longitudes = people.map((person) => person.place.longitude)
+    const latitudes = people.map((person) => person.place.latitude)
+    const bounds: [[number, number], [number, number]] = [
+      [Math.min(...longitudes), Math.min(...latitudes)],
+      [Math.max(...longitudes), Math.max(...latitudes)],
+    ]
+    const compact = window.matchMedia('(max-width: 700px)').matches
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    map.fitBounds(bounds, {
+      padding: compact ? { top: 125, right: 35, bottom: 250, left: 35 } : { top: 110, right: 430, bottom: 90, left: 80 },
+      maxZoom: 5.7,
+      pitch: compact ? 18 : 32,
+      bearing: 0,
+      duration: reduced ? 0 : 900,
+    })
+  }
+
   if (fatalError) {
     return (
       <div className="map-fallback" data-testid="map-fallback">
@@ -532,8 +577,16 @@ export default function HistoryMap({ people, selected, onSelect }: HistoryMapPro
       {!ready && <div className="map-loading"><span /><strong>正在展开山河星图</strong><small>加载地理与人物坐标…</small></div>}
       <div className="map-period-stamp" aria-live="polite"><span>{period.label}</span><div><strong>{period.dateRange}</strong><small>{period.note}</small></div></div>
       <div className="map-legend"><span><i className="legend-person" />人物地点</span><span><i className="legend-link" />关系流光</span><span><Sparkles size={12} />领域星色 · Three.js</span></div>
+      {hovered && hovered.id !== selected.id && <button className="map-person-preview" type="button" onClick={() => onSelect(hovered)} aria-label={`聚焦${hovered.name}`}>
+        <span className="preview-orbit" aria-hidden="true">{hovered.name.slice(0, 1)}</span>
+        <span className="preview-copy"><small>{periodById.get(hovered.periodId)?.label} · {categoryLabel[hovered.categories[0]]}</small><strong>{hovered.name}</strong><em>{hovered.roles.slice(0, 2).join(' · ')}</em><span>{hovered.place.name} · {placeRelationLabel(hovered.place.relation)}</span></span>
+        <span className="preview-action">点击聚焦</span>
+      </button>}
       {tileWarning && <div className="tile-warning" role="status">地形底图连接不稳定，人物坐标与交互仍可使用。</div>}
-      <button className="reset-map" type="button" onClick={() => mapRef.current?.fitBounds(chinaBounds, { padding: 54, duration: 700 })}><RotateCcw size={14} />纵览山河</button>
+      <div className="map-view-controls" aria-label="地图视野控制">
+        <button type="button" onClick={focusSelected}><Focus size={14} /><span>聚焦人物</span></button>
+        <button type="button" onClick={showPeriodOverview}><Maximize2 size={14} /><span>时代全景</span></button>
+      </div>
     </section>
   )
 }

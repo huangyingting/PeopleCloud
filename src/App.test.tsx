@@ -57,6 +57,35 @@ describe('PeopleCloud application', () => {
     expect(window.location.search).toContain('period=yuan')
   })
 
+  it('enters from the featured card and navigates a remembered person trail', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '从李白开始探索' }))
+    expect(screen.getByRole('complementary', { name: /李白人物详情/ })).toBeInTheDocument()
+    expect(window.location.search).toContain('person=li-bai')
+
+    await user.click(screen.getByRole('button', { name: '下一位人物' }))
+    expect(screen.queryByRole('complementary', { name: /李白人物详情/ })).not.toBeInTheDocument()
+    const trail = screen.getByRole('heading', { name: /你的星图足迹/ }).parentElement!
+    await user.click(within(trail).getByRole('button', { name: /李白/ }))
+    expect(screen.getByRole('complementary', { name: /李白人物详情/ })).toBeInTheDocument()
+  })
+
+  it('compares two people and can continue from the comparison', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '进入星图' }))
+    await user.click(screen.getByRole('button', { name: '人物对照' }))
+    const dialog = screen.getByRole('dialog', { name: '人物对照' })
+    const search = within(dialog).getByRole('searchbox', { name: '搜索对照人物' })
+    await user.type(search, '郭守敬')
+    await user.click(within(dialog).getByRole('button', { name: /郭守敬/ }))
+    expect(within(dialog).getByRole('heading', { name: '郭守敬' })).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: '在星图中查看 郭守敬' }))
+    expect(screen.getByRole('complementary', { name: /郭守敬人物详情/ })).toBeInTheDocument()
+    expect(window.location.search).toContain('period=yuan')
+  })
+
   it('closes dialogs with Escape and restores focus', async () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: '进入星图' }))

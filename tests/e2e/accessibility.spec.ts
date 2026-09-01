@@ -32,3 +32,12 @@ test('directory modal exposes an accessible isolated dialog', async ({ page }) =
   await expect(dialog.getByRole('searchbox', { name: '搜索人物' })).toBeFocused()
   await expectNoSeriousViolations(page, 'directory')
 })
+
+test('comparison workspace exposes an accessible isolated dialog', async ({ page }) => {
+  await page.goto('/?period=tang&person=li-bai')
+  await page.getByRole('button', { name: '人物对照' }).click()
+  const dialog = page.getByRole('dialog', { name: '人物对照' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('searchbox', { name: '搜索对照人物' })).toBeFocused()
+  await expectNoSeriousViolations(page, 'comparison')
+})

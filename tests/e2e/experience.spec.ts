@@ -83,6 +83,41 @@ test('expanded constellations stay legible and expose animated relation metadata
   await expect(page).toHaveURL(/period=qing&person=sun-yat-sen/)
 })
 
+test('map previews, view controls and person trail support guided exploration', async ({ page }) => {
+  await page.goto('/?period=tang&person=li-bai')
+  await expect(page.locator('.map-person-marker').first()).toBeVisible({ timeout: 20_000 })
+
+  const marker = page.locator('.map-person-marker:not(.selected)').first()
+  await marker.focus()
+  const preview = page.locator('.map-person-preview')
+  await expect(preview).toBeVisible()
+  await expect(preview).toContainText('点击聚焦')
+
+  await page.getByRole('button', { name: /时代全景/ }).click()
+  await page.getByRole('button', { name: /聚焦人物/ }).click()
+  await page.getByRole('button', { name: '下一位人物' }).click()
+  await expect(page.locator('.person-panel')).not.toHaveAttribute('data-person-id', 'li-bai')
+  const trail = page.locator('.journey-section')
+  await expect(trail).toContainText('李白')
+  await trail.getByRole('button', { name: /李白/ }).click()
+  await expect(page.locator('.person-panel')).toHaveAttribute('data-person-id', 'li-bai')
+})
+
+test('comparison workspace searches across periods and continues on the map', async ({ page }) => {
+  await page.goto('/?period=tang&person=li-bai')
+  await page.getByRole('button', { name: '人物对照' }).click()
+  const dialog = page.getByRole('dialog', { name: '人物对照' })
+  await expect(dialog).toBeVisible()
+  const search = dialog.getByRole('searchbox', { name: '搜索对照人物' })
+  await expect(search).toBeFocused()
+  await search.fill('郭守敬')
+  await dialog.getByRole('button', { name: /郭守敬/ }).click()
+  await expect(dialog.getByRole('heading', { name: '郭守敬' })).toBeVisible()
+  await dialog.getByRole('button', { name: '在星图中查看 郭守敬' }).click()
+  await expect(page.locator('.person-panel')).toHaveAttribute('data-person-id', 'guo-shoujing')
+  await expect(page).toHaveURL(/period=yuan&person=guo-shoujing/)
+})
+
 test('reduced motion keeps the constellation informative but static', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await enter(page)
