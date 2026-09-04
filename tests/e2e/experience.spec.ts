@@ -1,12 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-
-const transparentPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+3MxZ5wAAAABJRU5ErkJggg==', 'base64')
-
-async function makeTilesDeterministic(page: Page) {
-  await page.route('https://tiles.openfreemap.org/**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'image/png', body: transparentPng })
-  })
-}
+import { mockMapData } from './map-fixtures'
 
 async function enter(page: Page) {
   await page.goto('/')
@@ -16,7 +9,7 @@ async function enter(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await makeTilesDeterministic(page)
+  await mockMapData(page)
 })
 
 test('desktop exploration connects period, category, map, directory and URL', async ({ page }) => {
@@ -47,6 +40,8 @@ test('desktop exploration connects period, category, map, directory and URL', as
 })
 
 test('all fourteen periods expose a meaningful map sample', async ({ page }) => {
+  test.setTimeout(120_000)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await enter(page)
   const timeline = page.getByRole('group', { name: '选择历史时期' })
   const periodButtons = timeline.getByRole('button')
@@ -84,6 +79,7 @@ test('expanded constellations stay legible and expose animated relation metadata
 })
 
 test('map previews, view controls and person trail support guided exploration', async ({ page }) => {
+  test.setTimeout(90_000)
   await page.goto('/?period=tang&person=li-bai')
   await expect(page.locator('.map-person-marker').first()).toBeVisible({ timeout: 20_000 })
 

@@ -1,15 +1,19 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, ChevronRight, HelpCircle, LibraryBig, Map, Search, Sparkles, X } from 'lucide-react'
+import { BookOpen, ChevronRight, Compass, HelpCircle, LibraryBig, Map, Search, Sparkles, X } from 'lucide-react'
 import { categories, categoryLabel } from './data/categories'
+import type { Journey } from './data/journeys'
 import { people, personById } from './data/people'
 import { periodById, periods } from './data/periods'
 import { peopleForPeriod } from './lib/explore'
+import { readSavedPeople, SAVED_PEOPLE_KEY, writeSavedPeople } from './lib/savedPeople'
 import type { CategoryId, Person, PeriodId } from './types'
 import { Directory } from './components/Directory'
 import { CompareDialog } from './components/CompareDialog'
 import { FocusTrap } from './components/FocusTrap'
+import { JourneysDialog } from './components/JourneysDialog'
 import { PeriodTimeline } from './components/PeriodTimeline'
 import { PersonPanel } from './components/PersonPanel'
+import './features.css'
 
 const HistoryMap = lazy(() => import('./components/HistoryMap'))
 
@@ -26,8 +30,10 @@ function readUrlState(): InitialState {
   const periodParam = params.get('period') as PeriodId | null
   const periodId = person?.periodId ?? (periodParam && periodById.has(periodParam) ? periodParam : 'tang')
   const categoryParam = params.get('category') as CategoryId | null
-  const category = categoryParam && categories.some((item) => item.id === categoryParam) ? categoryParam : 'all'
-  const available = peopleForPeriod(people, periodId, category)
+  const requestedCategory = categoryParam && categories.some((item) => item.id === categoryParam) ? categoryParam : 'all'
+  const requestedPeople = peopleForPeriod(people, periodId, requestedCategory)
+  const category = requestedPeople.length ? requestedCategory : 'all'
+  const available = requestedPeople.length ? requestedPeople : peopleForPeriod(people, periodId, 'all')
   const selected = person && person.periodId === periodId && (category === 'all' || person.categories.includes(category))
     ? person
     : available.find((entry) => entry.featured) ?? available[0] ?? people.find((entry) => entry.periodId === periodId)!
@@ -110,11 +116,18 @@ export default function App() {
   const [directoryOpen, setDirectoryOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [compareOpen, setCompareOpen] = useState(false)
+  const [journeysOpen, setJourneysOpen] = useState(false)
+  const [activeJourney, setActiveJourney] = useState<{ journey: Journey; stopIndex: number } | null>(null)
+  const [savedPeople, setSavedPeople] = useState(readSavedPeople)
+  const [saveFeedback, setSaveFeedback] = useState('')
   const [panelOpen, setPanelOpen] = useState(true)
   const [visited, setVisited] = useState<Person[]>(initial.entered ? [initial.person] : [])
   const directoryButtonRef = useRef<HTMLButtonElement>(null)
   const aboutButtonRef = useRef<HTMLButtonElement>(null)
   const compareButtonRef = useRef<HTMLButtonElement>(null)
+  const journeysButtonRef = useRef<HTMLButtonElement>(null)
+  const journeyContentsRef = useRef<HTMLButtonElement>(null)
+  const journeyReturnFocusRef = useRef<HTMLButtonElement>(null)
   const period = periodById.get(periodId)!
   const visiblePeople = useMemo(() => peopleForPeriod(people, periodId, category), [periodId, category])
 
@@ -122,8 +135,8 @@ export default function App() {
     setVisited((current) => [...current.filter((entry) => entry.id !== person.id), person].slice(-6))
   }, [])
 
-  const selectPerson = useCallback((person: Person) => {
-    const nextCategory = category === 'all' || person.categories.includes(category) ? category : 'all'
+  const showPerson = useCallback((person: Person, nextCategory: CategoryId | 'all') => {
+    setSaveFeedback('')
     setPeriodId(person.periodId)
     setCategory(nextCategory)
     setSelected(person)
@@ -131,9 +144,59 @@ export default function App() {
     setPanelOpen(true)
     setDirectoryOpen(false)
     writeUrl(person, nextCategory)
-  }, [category, rememberPerson])
+  }, [rememberPerson])
+
+  const selectPerson = useCallback((person: Person) => {
+    setActiveJourney((current) => {
+      if (!current) return null
+      const stopIndex = current.journey.stops.findIndex((stop) => stop.personId === person.id)
+      return stopIndex < 0 ? null : { ...current, stopIndex }
+    })
+    const nextCategory = category === 'all' || person.categories.includes(category) ? category : 'all'
+    showPerson(person, nextCategory)
+  }, [category, showPerson])
+
+  const startJourney = useCallback((journey: Journey, stopIndex: number) => {
+    const stop = journey.stops[stopIndex]
+    if (!stop) return
+    const person = personById.get(stop.personId)
+    if (!person) return
+    showPerson(person, 'all')
+    setActiveJourney({ journey, stopIndex })
+    setJourneysOpen(false)
+  }, [showPerson])
+
+  const navigateJourney = (direction: -1 | 1) => {
+    if (activeJourney) startJourney(activeJourney.journey, activeJourney.stopIndex + direction)
+  }
+
+  const closeDirectory = useCallback(() => setDirectoryOpen(false), [])
+  const closeAbout = useCallback(() => setAboutOpen(false), [])
+  const closeCompare = useCallback(() => setCompareOpen(false), [])
+  const closeJourneys = useCallback(() => setJourneysOpen(false), [])
+
+  const toggleSaved = (person: Person) => {
+    const wasSaved = savedPeople.ids.includes(person.id)
+    const ids = wasSaved ? savedPeople.ids.filter((id) => id !== person.id) : [...savedPeople.ids, person.id]
+    const result = writeSavedPeople(ids)
+    setSavedPeople(result.error ? { ...savedPeople, error: result.error } : result)
+    setSaveFeedback(result.error ? '' : `${wasSaved ? '已取消收藏' : '已收藏'}${person.name}。`)
+  }
+
+  useEffect(() => {
+    const syncSaved = (event: StorageEvent) => {
+      if (event.key !== SAVED_PEOPLE_KEY && event.key !== null) return
+      const restored = readSavedPeople()
+      setSavedPeople(restored)
+      setSaveFeedback(restored.error ? '' : '收藏已与此浏览器同步。')
+    }
+    window.addEventListener('storage', syncSaved)
+    return () => window.removeEventListener('storage', syncSaved)
+  }, [])
 
   const selectPeriod = useCallback((nextPeriod: PeriodId) => {
+    setActiveJourney(null)
+    setSaveFeedback('')
     const sameCategory = peopleForPeriod(people, nextPeriod, category)
     const nextCategory = sameCategory.length ? category : 'all'
     const candidates = peopleForPeriod(people, nextPeriod, nextCategory)
@@ -149,6 +212,8 @@ export default function App() {
   const selectCategory = (nextCategory: CategoryId | 'all') => {
     const candidates = peopleForPeriod(people, periodId, nextCategory)
     if (!candidates.length) return
+    setActiveJourney(null)
+    setSaveFeedback('')
     setCategory(nextCategory)
     const nextPerson = candidates.some((person) => person.id === selected.id) ? selected : candidates.find((person) => person.featured) ?? candidates[0]
     setSelected(nextPerson)
@@ -160,6 +225,12 @@ export default function App() {
   useEffect(() => {
     const restore = () => {
       const state = readUrlState()
+      setActiveJourney(null)
+      setDirectoryOpen(false)
+      setAboutOpen(false)
+      setCompareOpen(false)
+      setJourneysOpen(false)
+      setSaveFeedback('')
       setEntered(state.entered)
       setPeriodId(state.periodId)
       setSelected(state.person)
@@ -197,8 +268,10 @@ export default function App() {
     writeUrl(nextPerson, person ? 'all' : category, 'replace')
   }, [category, rememberPerson, selected])
 
+  const modalOpen = directoryOpen || aboutOpen || compareOpen || journeysOpen
+
   useEffect(() => {
-    if (!entered) return
+    if (!entered || modalOpen) return
     const openDirectory = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'k') {
         event.preventDefault()
@@ -207,20 +280,19 @@ export default function App() {
     }
     window.addEventListener('keydown', openDirectory)
     return () => window.removeEventListener('keydown', openDirectory)
-  }, [entered])
+  }, [entered, modalOpen])
 
   if (!entered) return <Intro onEnter={enterExperience} />
-
-  const modalOpen = directoryOpen || aboutOpen || compareOpen
 
   return (
     <main className="app-shell" id="main-content" style={{ '--active-accent': period.accent } as React.CSSProperties}>
       <header className="topbar" inert={modalOpen ? true : undefined} aria-hidden={modalOpen ? true : undefined}>
-        <button className="brand brand-button" type="button" onClick={() => setEntered(false)} aria-label="返回人间星图首页">
+        <button className="brand brand-button" type="button" onClick={() => { setActiveJourney(null); setEntered(false) }} aria-label="返回人间星图首页">
           <span className="brand-seal">人</span><span><strong>人间星图</strong><small>PEOPLE CLOUD</small></span>
         </button>
         <div className="topbar-context"><span>{period.label}</span><strong>{period.note}</strong></div>
         <div className="top-actions">
+          <button ref={journeysButtonRef} className="action-button journeys-trigger" type="button" onClick={() => { journeyReturnFocusRef.current = journeysButtonRef.current; setJourneysOpen(true) }} aria-label="打开主题漫游"><Compass size={17} /><span>主题漫游</span></button>
           <button className="search-action" type="button" onClick={() => setDirectoryOpen(true)}><Search size={16} /><span>搜索人物、地点…</span><kbd>⌘ K</kbd></button>
           <button ref={directoryButtonRef} className="action-button" type="button" aria-label="打开名人名录" onClick={() => setDirectoryOpen(true)}><LibraryBig size={17} /><span>名录</span></button>
           <button ref={aboutButtonRef} className="icon-button" type="button" onClick={() => setAboutOpen(true)} aria-label="查看使用与数据说明"><HelpCircle size={19} /></button>
@@ -233,7 +305,7 @@ export default function App() {
 
       <section className="workspace" inert={modalOpen ? true : undefined} aria-hidden={modalOpen ? true : undefined}>
         <Suspense fallback={<div className="map-suspense"><span /><p>星图组件载入中…</p></div>}>
-          <HistoryMap people={visiblePeople} selected={selected} onSelect={selectPerson} />
+          <HistoryMap people={visiblePeople} selected={selected} onSelect={selectPerson} onInspect={() => setPanelOpen(false)} />
         </Suspense>
         <div className="category-filter" aria-label="人物领域筛选">
           <button type="button" className={category === 'all' ? 'active' : ''} aria-pressed={category === 'all'} onClick={() => selectCategory('all')}>全部 <span>{peopleForPeriod(people, periodId, 'all').length}</span></button>
@@ -245,11 +317,19 @@ export default function App() {
         <div className="map-result-count" aria-live="polite">{category === 'all' ? period.label : categoryLabel[category]} · {visiblePeople.length} 位人物</div>
         {!panelOpen && <button className="reopen-panel" type="button" onClick={() => setPanelOpen(true)}><span>{selected.name}</span><small>打开人物卷轴</small><ChevronRight /></button>}
         {panelOpen && <PersonPanel
-          key={selected.id}
           person={selected}
           people={people}
           visiblePeople={visiblePeople}
           visited={visited}
+          saved={savedPeople.ids.includes(selected.id)}
+          savedError={savedPeople.error}
+          saveFeedback={saveFeedback}
+          onToggleSaved={() => toggleSaved(selected)}
+          activeJourney={activeJourney}
+          onNavigateJourney={navigateJourney}
+          onEndJourney={() => setActiveJourney(null)}
+          onOpenJourneys={() => { journeyReturnFocusRef.current = journeyContentsRef.current; setJourneysOpen(true) }}
+          journeyContentsRef={journeyContentsRef}
           onSelect={selectPerson}
           onNavigate={navigateVisible}
           onSurprise={surpriseMe}
@@ -259,9 +339,10 @@ export default function App() {
         />}
       </section>
 
-      {directoryOpen && <Directory onClose={() => setDirectoryOpen(false)} onSelect={selectPerson} returnFocusRef={directoryButtonRef} />}
-      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} returnFocusRef={aboutButtonRef} />}
-      {compareOpen && <CompareDialog person={selected} people={people} onSelect={selectPerson} onClose={() => setCompareOpen(false)} returnFocusRef={compareButtonRef} />}
+      {directoryOpen && <Directory savedIds={savedPeople.ids} savedError={savedPeople.error} onToggleSaved={toggleSaved} onClose={closeDirectory} onSelect={selectPerson} returnFocusRef={directoryButtonRef} />}
+      {journeysOpen && <JourneysDialog initialJourneyId={activeJourney?.journey.id} onStart={startJourney} onClose={closeJourneys} returnFocusRef={journeyReturnFocusRef} />}
+      {aboutOpen && <AboutDialog onClose={closeAbout} returnFocusRef={aboutButtonRef} />}
+      {compareOpen && <CompareDialog person={selected} people={people} onSelect={selectPerson} onClose={closeCompare} returnFocusRef={compareButtonRef} />}
     </main>
   )
 }

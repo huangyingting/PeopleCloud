@@ -1,11 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
-
-const transparentPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+3MxZ5wAAAABJRU5ErkJggg==', 'base64')
-
-async function deterministicTiles(page: Page) {
-  await page.route('https://tiles.openfreemap.org/**', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: transparentPng }))
-}
+import { mockMapData } from './map-fixtures'
 
 async function expectNoSeriousViolations(page: Page, context: string) {
   const results = await new AxeBuilder({ page })
@@ -14,7 +9,7 @@ async function expectNoSeriousViolations(page: Page, context: string) {
   expect(violations, `${context}: ${violations.map((item) => `${item.id} (${item.nodes.length})`).join(', ')}`).toEqual([])
 }
 
-test.beforeEach(async ({ page }) => deterministicTiles(page))
+test.beforeEach(async ({ page }) => mockMapData(page))
 
 test('intro and map workspace have no serious automated accessibility violations', async ({ page }) => {
   await page.goto('/')
