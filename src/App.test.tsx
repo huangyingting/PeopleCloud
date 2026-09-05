@@ -7,9 +7,10 @@ import { personById } from './data/people'
 import { SAVED_PEOPLE_KEY } from './lib/savedPeople'
 
 vi.mock('./components/HistoryMap', () => ({
-  default: ({ people, selected, onSelect }: { people: Array<{ id: string; name: string }>; selected: { id: string; name: string }; onSelect: (person: { id: string; name: string }) => void }) => (
+  default: ({ people, selected, onSelect, onInspect }: { people: Array<{ id: string; name: string }>; selected: { id: string; name: string }; onSelect: (person: { id: string; name: string }) => void; onInspect?: () => void }) => (
     <section aria-label="测试人物地图" data-selected={selected.id}>
       {people.map((person) => <button type="button" key={person.id} onClick={() => onSelect(person)}>{person.name}</button>)}
+      <button type="button" onClick={onInspect}>测试地点探索</button>
     </section>
   ),
 }))
@@ -29,6 +30,7 @@ describe('PeopleCloud application', () => {
     render(<App />)
     expect(screen.getByRole('heading', { name: /群星落人间/ })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '进入星图' }))
+    await user.click(screen.getByRole('button', { name: '展开时代与领域' }))
     expect(await screen.findByRole('button', { name: /唐，618—907/ })).toHaveAttribute('aria-current', 'true')
     expect(screen.getByRole('complementary', { name: /人物详情/ })).toHaveAttribute('data-person-id', 'tang-taizong')
     expect(window.location.search).toContain('period=tang')
@@ -42,6 +44,7 @@ describe('PeopleCloud application', () => {
     const user = userEvent.setup()
     render(<App />)
     await user.click(screen.getByRole('button', { name: '进入星图' }))
+    await user.click(screen.getByRole('button', { name: '展开时代与领域' }))
     const filters = screen.getByRole('region', { name: '测试人物地图' }).parentElement!
     await user.click(screen.getByRole('button', { name: /秦，前221—前206/ }))
     const medicine = within(filters).getByRole('button', { name: /医学/ })
@@ -58,6 +61,7 @@ describe('PeopleCloud application', () => {
     const map = await screen.findByRole('region', { name: '测试人物地图' })
     expect(map).toHaveAttribute('data-selected', 'qin-shihuang')
     expect(within(map).getByRole('button', { name: '秦始皇' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '展开时代与领域' }))
     expect(screen.getByRole('button', { name: /^全部 / })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: /^医学/ })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: '下一位人物' }))
@@ -120,6 +124,57 @@ describe('PeopleCloud application', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '关于人间星图' })).not.toBeInTheDocument())
     await waitFor(() => expect(help).toHaveFocus())
+  })
+
+  it('folds filters by default and restores their selection on expansion', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/?person=li-bai&category=literature')
+    render(<App />)
+    const trigger = screen.getByRole('button', { name: '展开时代与领域' })
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('group', { name: '选择历史时期' })).not.toBeInTheDocument()
+    await user.click(trigger)
+    expect(screen.getByRole('button', { name: /^文学/ })).toHaveAttribute('aria-pressed', 'true')
+    await user.keyboard('{Escape}')
+    expect(trigger).toHaveFocus()
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    await user.click(trigger)
+    expect(screen.getByRole('button', { name: /^文学/ })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('restores expanded details and filters after reversible map focus', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/?person=li-bai&category=literature')
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '展开人物详情' }))
+    await user.click(screen.getByRole('button', { name: '展开时代与领域' }))
+    const panel = screen.getByRole('complementary', { name: '李白人物详情' })
+    const previousUrl = window.location.search
+    await user.click(screen.getByRole('button', { name: '专注地图' }))
+    expect(panel).not.toBeVisible()
+    expect(screen.queryByRole('region', { name: '时代与领域' })).not.toBeInTheDocument()
+    expect(window.location.search).toBe(previousUrl)
+    await user.click(await screen.findByRole('button', { name: '测试地点探索' }))
+    await user.keyboard('{Escape}')
+    expect(panel).toBeVisible()
+    expect(panel).toHaveClass('expanded')
+    expect(screen.getByRole('button', { name: /^文学/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: '专注地图' })).toHaveFocus()
+  })
+
+  it('keeps map selection available in focus mode without opening the sidebar', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/?person=li-bai')
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '专注地图' }))
+    const map = await screen.findByRole('region', { name: '测试人物地图' })
+    await user.click(within(map).getByRole('button', { name: '杜甫' }))
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument()
+    expect(map).toHaveAttribute('data-selected', 'du-fu')
+    expect(window.location.search).toContain('person=du-fu')
+    await user.click(screen.getByRole('button', { name: /杜甫.*打开人物卷轴/ }))
+    expect(screen.getByRole('complementary', { name: '杜甫人物详情' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '专注地图' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('saves a person, searches the collection, reloads it, and removes it from the directory', async () => {
@@ -309,6 +364,7 @@ describe('PeopleCloud application', () => {
     render(<App />)
     await user.click(screen.getByRole('button', { name: '打开主题漫游' }))
     await user.click(screen.getByRole('button', { name: '开始漫游：诗里见大唐' }))
+    if (change !== 'history') await user.click(screen.getByRole('button', { name: '展开时代与领域' }))
     if (change === 'period') await user.click(screen.getByRole('button', { name: /宋，960—1279/ }))
     if (change === 'category') {
       const workspace = screen.getByRole('region', { name: '测试人物地图' }).parentElement!

@@ -20,6 +20,7 @@ test('desktop exploration connects period, category, map, directory and URL', as
 
   await expect(page.locator('.constellation-canvas')).toBeVisible()
   await expect(page.locator('.person-panel')).toHaveAttribute('data-person-id', 'tang-taizong')
+  await page.getByRole('button', { name: '展开时代与领域' }).click()
   await page.getByRole('button', { name: /宋，960—1279/ }).click()
   await expect(page.locator('.person-panel')).toHaveAttribute('data-person-id', 'su-shi')
   await expect(page).toHaveURL(/period=song&person=su-shi/)
@@ -43,6 +44,7 @@ test('all fourteen periods expose a meaningful map sample', async ({ page }) => 
   test.setTimeout(120_000)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await enter(page)
+  await page.getByRole('button', { name: '展开时代与领域' }).click()
   const timeline = page.getByRole('group', { name: '选择历史时期' })
   const periodButtons = timeline.getByRole('button')
   await expect(periodButtons).toHaveCount(14)
@@ -108,6 +110,7 @@ test('map previews, view controls and person trail support guided exploration', 
   await page.keyboard.press('Enter')
   await expect(page.locator('.person-panel')).toHaveAttribute('data-person-id', keyboardTarget!)
 
+  await page.getByRole('button', { name: '展开地图工具' }).click()
   await page.getByRole('button', { name: /时代全景/ }).click()
   await page.getByRole('button', { name: /聚焦人物/ }).click()
   const beforeNext = await page.locator('.person-panel').getAttribute('data-person-id')
@@ -146,6 +149,7 @@ test('reduced motion keeps the constellation informative but static', async ({ p
 test('URL state restores a selected person and keyboard shortcut opens a trapped directory', async ({ page }) => {
   await page.goto('/?period=ming&person=zheng-he&category=exploration')
   await expect(page.locator('.person-panel')).toHaveAttribute('data-person-id', 'zheng-he')
+  await page.getByRole('button', { name: '展开时代与领域' }).click()
   await expect(page.getByRole('button', { name: /明，1368—1644/ })).toHaveAttribute('aria-current', 'true')
   await page.keyboard.press('Control+K')
   const directory = page.getByRole('dialog', { name: '名人名录' })

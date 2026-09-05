@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Bookmark, ChevronDown, ChevronUp, Columns3, Dices, List, MapPin, Route, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Bookmark, ChevronDown, ChevronUp, Columns3, Dices, List, MapPin, PanelRightClose, Route, X } from 'lucide-react'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { categoryLabel } from '../data/categories'
 import type { Journey } from '../data/journeys'
@@ -45,7 +45,7 @@ export function PersonPanel({ person, people, visiblePeople, visited, saved, sav
       <button className="panel-grab" type="button" onClick={() => setExpanded((current) => !current)} aria-label={expanded ? '收起人物详情' : '展开人物详情'} aria-expanded={expanded}>
         <span aria-hidden="true" />{expanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
       </button>
-      <button className="icon-button panel-close" type="button" onClick={onClose} aria-label="关闭人物详情"><X size={18} /></button>
+      <button className="icon-button panel-close" type="button" onClick={onClose} aria-label="关闭人物详情" title="收起人物面板"><PanelRightClose size={18} /></button>
       <div className="person-kicker"><span style={{ background: period.accent }} />{period.label} · {period.dateRange}</div>
       {activeJourney && <section className="journey-current" aria-labelledby="active-journey-title">
         <div className="journey-current-heading">

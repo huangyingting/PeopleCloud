@@ -7,6 +7,7 @@ async function openMap(page: Page) {
   await page.goto('/?period=tang&person=li-bai')
   await expect(page.locator('.map-person-marker.selected')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('.history-map')).toHaveAttribute('data-zoom', /^5\.[26]$/)
+  await page.getByRole('button', { name: '展开地图工具' }).click()
 }
 
 test.beforeEach(async ({ page }) => mockMapData(page))
@@ -39,6 +40,7 @@ test('clicking a place discovers nearby people and can continue across eras', as
   await openMap(page)
   await page.getByRole('button', { name: '立体地形' }).click()
   await expect(page.locator('.history-map')).toHaveAttribute('data-pitch', '0')
+  await page.getByRole('button', { name: '关闭地图工具' }).click()
   const canvas = page.locator('.maplibregl-canvas')
   const box = await canvas.boundingBox()
   await canvas.click({ position: { x: box!.width * 0.22, y: box!.height * 0.3 } })

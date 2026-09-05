@@ -9,7 +9,7 @@ import {
 import 'maplibre-gl/dist/maplibre-gl.css'
 import * as THREE from 'three'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Compass, Focus, Layers3, MapPin, Maximize2, Moon, Mountain, Orbit, Pause, RotateCcw, Route, X, ZoomIn } from 'lucide-react'
+import { Compass, Focus, Layers3, MapPin, Maximize2, Moon, Mountain, Orbit, Pause, RotateCcw, Route, Settings2, X, ZoomIn } from 'lucide-react'
 import { categoryLabel } from '../data/categories'
 import { people as allPeople } from '../data/people'
 import { periodById } from '../data/periods'
@@ -23,7 +23,7 @@ const chinaBounds: [[number, number], [number, number]] = [[70, 14], [138, 56]]
 function cameraOffset(container: HTMLElement): [number, number] {
   const panel = container.closest('.workspace')?.querySelector('.person-panel')?.getBoundingClientRect()
   const compact = window.matchMedia('(max-width: 700px)').matches
-  return compact ? [0, -(panel?.height ?? 0) / 2 + 45] : [-(panel?.width ?? 0) / 2, 25]
+  return compact ? [0, -(panel?.height ?? 0) / 2] : [-(panel?.width ?? 0) / 2, 0]
 }
 
 function motionDuration(duration: number) {
@@ -384,6 +384,7 @@ interface HistoryMapProps {
   selected: Person
   onSelect: (person: Person) => void
   onInspect?: () => void
+  minimal?: boolean
 }
 
 interface MarkerEntry {
@@ -398,7 +399,7 @@ interface InspectedPlace {
   name: string
 }
 
-export default function HistoryMap({ people, selected, onSelect, onInspect }: HistoryMapProps) {
+export default function HistoryMap({ people, selected, onSelect, onInspect, minimal = false }: HistoryMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapType | null>(null)
@@ -417,6 +418,8 @@ export default function HistoryMap({ people, selected, onSelect, onInspect }: Hi
   const [inspected, setInspected] = useState<InspectedPlace | null>(null)
   const [camera, setCamera] = useState({ coordinate: [selected.place.longitude, selected.place.latitude] as Coordinate, zoom: 5.4, pitch: 44 })
   const [hovered, setHovered] = useState<Person | null>(null)
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const toolsButtonRef = useRef<HTMLButtonElement>(null)
   const is3DRef = useRef(is3D)
   const orbitRef = useRef(orbiting)
   is3DRef.current = is3D
@@ -432,6 +435,7 @@ export default function HistoryMap({ people, selected, onSelect, onInspect }: Hi
     setInspected(null)
     setHovered(null)
     setOrbiting(false)
+    setToolsOpen(false)
     onSelect(person)
   }
   selectRef.current = choosePerson
@@ -507,6 +511,7 @@ export default function HistoryMap({ people, selected, onSelect, onInspect }: Hi
         setInspected({ coordinate: [event.lngLat.lng, event.lngLat.lat], name: typeof name === 'string' ? name : '此处的历史回声' })
         setHovered(null)
         setOrbiting(false)
+        setToolsOpen(false)
         if (window.matchMedia('(max-width: 700px)').matches) inspectRef.current?.()
       })
       const stopOrbit = () => setOrbiting(false)
@@ -527,6 +532,26 @@ export default function HistoryMap({ people, selected, onSelect, onInspect }: Hi
       mapRef.current = null
     }
   }, [fatalError])
+
+  useEffect(() => {
+    if (minimal) {
+      setToolsOpen(false)
+      setInspected(null)
+    }
+  }, [minimal])
+
+  useEffect(() => {
+    if (!toolsOpen) return
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || containerRef.current?.closest('[inert]')) return
+      event.preventDefault()
+      event.stopPropagation()
+      setToolsOpen(false)
+      toolsButtonRef.current?.focus()
+    }
+    document.addEventListener('keydown', close)
+    return () => document.removeEventListener('keydown', close)
+  }, [toolsOpen])
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -669,7 +694,13 @@ export default function HistoryMap({ people, selected, onSelect, onInspect }: Hi
     element.className = 'inspection-marker'
     element.setAttribute('aria-hidden', 'true')
     const marker = new Marker({ element }).setLngLat(inspected.coordinate).addTo(map)
-    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setInspected(null) }
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || containerRef.current?.closest('[inert]')) return
+      event.preventDefault()
+      event.stopPropagation()
+      setInspected(null)
+      map.getCanvas().focus()
+    }
     document.addEventListener('keydown', close)
     return () => {
       marker.remove()
@@ -730,8 +761,8 @@ export default function HistoryMap({ people, selected, onSelect, onInspect }: Hi
     const bottom = Math.min((panel?.height ?? 0) + 35, height * 0.6)
     map.fitBounds(bounds, {
       padding: compact
-        ? { top: Math.min(155, height * 0.23), right: 35, bottom, left: 35 }
-        : { top: Math.min(160, height * 0.25), right: (panel?.width ?? 0) + 60, bottom: Math.min(120, height * 0.25), left: 60 },
+        ? { top: Math.min(60, height * 0.15), right: 35, bottom, left: 35 }
+        : { top: Math.min(60, height * 0.15), right: (panel?.width ?? 0) + 60, bottom: Math.min(120, height * 0.25), left: 60 },
       maxZoom: 5.7,
       pitch: is3D ? 25 : 0,
       bearing: 0,
@@ -763,18 +794,28 @@ export default function HistoryMap({ people, selected, onSelect, onInspect }: Hi
       <div ref={containerRef} className="map-canvas" />
       <div ref={overlayRef} className="three-overlay" />
       {!ready && <div className="map-loading"><span /><strong>正在展开山河星图</strong><small>加载地理与人物坐标…</small></div>}
-      <div className="map-period-stamp" aria-live="polite"><span>{period.label}</span><div><strong>{period.dateRange}</strong><small>{period.note}</small></div></div>
-      <div className="map-style-controls" aria-label="地图图层">
-        <div className="map-theme-switch" role="group" aria-label="底图风格">
-          <button type="button" aria-pressed={theme === 'night'} onClick={() => setTheme('night')}><Moon size={14} />星夜</button>
-          <button type="button" aria-pressed={theme === 'landscape'} onClick={() => setTheme('landscape')}><Mountain size={14} />山河</button>
-        </div>
-        <button type="button" className="connection-toggle" aria-pressed={connections} onClick={() => setConnections((current) => !current)}><Route size={14} /><span>人物连线</span></button>
+      <div className="map-toolbox">
+        <button ref={toolsButtonRef} className="map-tools-trigger" type="button" aria-label={toolsOpen ? '收起地图工具' : '展开地图工具'} aria-expanded={toolsOpen} aria-controls="map-tools" onClick={() => { setInspected(null); setToolsOpen((current) => !current) }}><Settings2 size={17} /><span>地图工具</span></button>
+        <section id="map-tools" className="map-tools-panel" aria-label="地图工具" hidden={!toolsOpen}>
+          <header><strong>地图工具</strong><button className="icon-button" type="button" aria-label="关闭地图工具" onClick={() => { setToolsOpen(false); toolsButtonRef.current?.focus() }}><X size={15} /></button></header>
+          <div className="map-style-controls" aria-label="地图图层">
+            <div className="map-theme-switch" role="group" aria-label="底图风格">
+              <button type="button" aria-pressed={theme === 'night'} onClick={() => setTheme('night')}><Moon size={14} />星夜</button>
+              <button type="button" aria-pressed={theme === 'landscape'} onClick={() => setTheme('landscape')}><Mountain size={14} />山河</button>
+            </div>
+            <button type="button" className="connection-toggle" aria-pressed={connections} onClick={() => setConnections((current) => !current)}><Route size={14} /><span>人物连线</span></button>
+          </div>
+          <div className="map-view-controls" aria-label="地图视野控制">
+            <button type="button" aria-label="聚焦人物" onClick={focusSelected}><Focus size={14} /><span>聚焦人物</span></button>
+            <button type="button" aria-label="时代全景" onClick={showPeriodOverview}><Maximize2 size={14} /><span>时代全景</span></button>
+            <button type="button" aria-label="立体地形" aria-pressed={is3D} disabled={terrainFailed} onClick={() => { setOrbiting(false); setIs3D((current) => !current) }} title={terrainFailed ? '高程数据暂不可用' : '切换平面与真实高程地形'}><Layers3 size={14} /><span>{is3D ? '3D 地形' : '2D 平面'}</span></button>
+            <button type="button" aria-label={orbiting ? '暂停环游' : '环游视野'} aria-pressed={orbiting} disabled={reducedMotion} title={reducedMotion ? '已遵循系统减少动态效果设置' : '缓慢环绕当前视野，拖动地图即可暂停'} onClick={() => { mapRef.current?.stop(); setOrbiting((current) => !current) }}>{orbiting ? <Pause size={14} /> : <Orbit size={14} />}<span>{orbiting ? '暂停环游' : '环游视野'}</span></button>
+          </div>
+          <div className="map-coordinate"><Compass size={12} /><span>{formatCoordinate(camera.coordinate)}</span><span>z{camera.zoom.toFixed(1)}</span></div>
+        </section>
       </div>
-      <div className="map-legend"><span><i className="legend-person" />人物锚点</span><span><i className="legend-link" />关联线 · 非行迹</span><span>现代地理参考底图</span></div>
-      <p className="map-context-note">现代地理参考 · 非历史疆域</p>
-      <div className="map-coordinate"><Compass size={12} /><span>{formatCoordinate(camera.coordinate)}</span><span>z{camera.zoom.toFixed(1)}</span></div>
-      {hovered && !inspected && hovered.id !== selected.id && <button className="map-person-preview" type="button" onClick={() => choosePerson(hovered)} aria-label={`聚焦${hovered.name}`}>
+      <p className="map-context-note">现代地理参考 · 关联线非行迹</p>
+      {hovered && !inspected && !toolsOpen && hovered.id !== selected.id && <button className="map-person-preview" type="button" onClick={() => choosePerson(hovered)} aria-label={`聚焦${hovered.name}`}>
         <span className="preview-orbit" aria-hidden="true">{hovered.name.slice(0, 1)}</span>
         <span className="preview-copy"><small>{periodById.get(hovered.periodId)?.label} · {categoryLabel[hovered.categories[0]]}</small><strong>{hovered.name}</strong><em>{hovered.roles.slice(0, 2).join(' · ')}</em><span>{hovered.place.name} · {placeRelationLabel(hovered.place.relation)}</span></span>
         <span className="preview-action">点击聚焦</span>
@@ -792,13 +833,7 @@ export default function HistoryMap({ people, selected, onSelect, onInspect }: Hi
         <small className="place-inspector-note">按人物地点锚点推荐，不代表实际行程。</small>
       </section>}
       {(tileWarning || enhancementWarning) && <div className="tile-warning" role="status">{terrainFailed ? '高程数据暂不可用，已切换平面地图。' : tileWarning ? '部分地理数据未能加载，人物仍可探索。' : '星光增强暂不可用，地图仍可探索。'}<button type="button" onClick={() => window.location.reload()}><RotateCcw size={12} />重试</button></div>}
-      <div className="map-view-controls" aria-label="地图视野控制">
-        <button type="button" aria-label="聚焦人物" onClick={focusSelected}><Focus size={14} /><span>聚焦人物</span></button>
-        <button type="button" aria-label="时代全景" onClick={showPeriodOverview}><Maximize2 size={14} /><span>时代全景</span></button>
-        <button type="button" aria-label="立体地形" aria-pressed={is3D} disabled={terrainFailed} onClick={() => { setOrbiting(false); setIs3D((current) => !current) }} title={terrainFailed ? '高程数据暂不可用' : '切换平面与真实高程地形'}><Layers3 size={14} /><span>{is3D ? '3D 地形' : '2D 平面'}</span></button>
-        <button type="button" aria-label={orbiting ? '暂停环游' : '环游视野'} aria-pressed={orbiting} disabled={reducedMotion} title={reducedMotion ? '已遵循系统减少动态效果设置' : '缓慢环绕当前视野，拖动地图即可暂停'} onClick={() => { setInspected(null); mapRef.current?.stop(); setOrbiting((current) => !current) }}>{orbiting ? <Pause size={14} /> : <Orbit size={14} />}<span>{orbiting ? '暂停' : '环游'}</span></button>
-      </div>
-      <p className="map-keyboard-help" id="map-keyboard-help">点击地图发现附近人物 · 滚轮缩放 · 右键拖动倾斜<span className="sr-only"> · Tab 进入地图人物，方向键切换人物，Enter 打开</span></p>
+      <p className="sr-only" id="map-keyboard-help">点击地图发现附近人物 · 滚轮缩放 · 右键拖动倾斜 · Tab 进入地图人物，方向键切换人物，Enter 打开</p>
     </section>
   )
 }

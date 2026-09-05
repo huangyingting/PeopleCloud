@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BookOpen, ChevronRight, Compass, HelpCircle, LibraryBig, Map, Search, Sparkles, X } from 'lucide-react'
+import { BookOpen, ChevronDown, ChevronRight, Compass, HelpCircle, LibraryBig, Map, Maximize2, Minimize2, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { categories, categoryLabel } from './data/categories'
 import type { Journey } from './data/journeys'
 import { people, personById } from './data/people'
@@ -11,7 +11,7 @@ import { Directory } from './components/Directory'
 import { CompareDialog } from './components/CompareDialog'
 import { FocusTrap } from './components/FocusTrap'
 import { JourneysDialog } from './components/JourneysDialog'
-import { PeriodTimeline } from './components/PeriodTimeline'
+import { ExploreDrawer } from './components/ExploreDrawer'
 import { PersonPanel } from './components/PersonPanel'
 import './features.css'
 
@@ -121,6 +121,8 @@ export default function App() {
   const [savedPeople, setSavedPeople] = useState(readSavedPeople)
   const [saveFeedback, setSaveFeedback] = useState('')
   const [panelOpen, setPanelOpen] = useState(true)
+  const [exploreOpen, setExploreOpen] = useState(false)
+  const [focusMode, setFocusMode] = useState(false)
   const [visited, setVisited] = useState<Person[]>(initial.entered ? [initial.person] : [])
   const directoryButtonRef = useRef<HTMLButtonElement>(null)
   const aboutButtonRef = useRef<HTMLButtonElement>(null)
@@ -128,6 +130,9 @@ export default function App() {
   const journeysButtonRef = useRef<HTMLButtonElement>(null)
   const journeyContentsRef = useRef<HTMLButtonElement>(null)
   const journeyReturnFocusRef = useRef<HTMLButtonElement>(null)
+  const exploreButtonRef = useRef<HTMLButtonElement>(null)
+  const focusButtonRef = useRef<HTMLButtonElement>(null)
+  const reopenButtonRef = useRef<HTMLButtonElement>(null)
   const period = periodById.get(periodId)!
   const visiblePeople = useMemo(() => peopleForPeriod(people, periodId, category), [periodId, category])
 
@@ -174,6 +179,10 @@ export default function App() {
   const closeAbout = useCallback(() => setAboutOpen(false), [])
   const closeCompare = useCallback(() => setCompareOpen(false), [])
   const closeJourneys = useCallback(() => setJourneysOpen(false), [])
+  const closeExplore = useCallback(() => {
+    setExploreOpen(false)
+    exploreButtonRef.current?.focus()
+  }, [])
 
   const toggleSaved = (person: Person) => {
     const wasSaved = savedPeople.ids.includes(person.id)
@@ -269,77 +278,83 @@ export default function App() {
   }, [category, rememberPerson, selected])
 
   const modalOpen = directoryOpen || aboutOpen || compareOpen || journeysOpen
+  const panelVisible = panelOpen && !focusMode
 
   useEffect(() => {
     if (!entered || modalOpen) return
     const openDirectory = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
       if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'k') {
         event.preventDefault()
         setDirectoryOpen(true)
       }
+      if (event.key === 'Escape') {
+        if (exploreOpen && !focusMode) closeExplore()
+        else if (focusMode) {
+          setFocusMode(false)
+          focusButtonRef.current?.focus()
+        }
+      }
     }
     window.addEventListener('keydown', openDirectory)
     return () => window.removeEventListener('keydown', openDirectory)
-  }, [entered, modalOpen])
+  }, [entered, modalOpen, exploreOpen, focusMode, closeExplore])
 
   if (!entered) return <Intro onEnter={enterExperience} />
 
   return (
-    <main className="app-shell" id="main-content" style={{ '--active-accent': period.accent } as React.CSSProperties}>
+    <main className={`app-shell map-first${focusMode ? ' focus-mode' : ''}`} id="main-content" style={{ '--active-accent': period.accent } as React.CSSProperties}>
       <header className="topbar" inert={modalOpen ? true : undefined} aria-hidden={modalOpen ? true : undefined}>
-        <button className="brand brand-button" type="button" onClick={() => { setActiveJourney(null); setEntered(false) }} aria-label="返回人间星图首页">
+        <button className="brand brand-button" type="button" onClick={() => { setActiveJourney(null); setFocusMode(false); setExploreOpen(false); setEntered(false) }} aria-label="返回人间星图首页">
           <span className="brand-seal">人</span><span><strong>人间星图</strong><small>PEOPLE CLOUD</small></span>
         </button>
-        <div className="topbar-context"><span>{period.label}</span><strong>{period.note}</strong></div>
+        <button ref={exploreButtonRef} className="explore-trigger action-button" type="button" aria-label={exploreOpen && !focusMode ? '收起时代与领域' : '展开时代与领域'} aria-expanded={exploreOpen && !focusMode} aria-controls="explore-controls" onClick={() => setExploreOpen((current) => !current)}>
+          <SlidersHorizontal size={15} /><span>{period.label}<small>{category === 'all' ? `${visiblePeople.length} 人` : categoryLabel[category]}</small></span><ChevronDown size={13} />
+        </button>
+        {focusMode && <span className="focus-context">{period.label} · {selected.name}</span>}
         <div className="top-actions">
           <button ref={journeysButtonRef} className="action-button journeys-trigger" type="button" onClick={() => { journeyReturnFocusRef.current = journeysButtonRef.current; setJourneysOpen(true) }} aria-label="打开主题漫游"><Compass size={17} /><span>主题漫游</span></button>
           <button className="search-action" type="button" onClick={() => setDirectoryOpen(true)}><Search size={16} /><span>搜索人物、地点…</span><kbd>⌘ K</kbd></button>
           <button ref={directoryButtonRef} className="action-button" type="button" aria-label="打开名人名录" onClick={() => setDirectoryOpen(true)}><LibraryBig size={17} /><span>名录</span></button>
           <button ref={aboutButtonRef} className="icon-button" type="button" onClick={() => setAboutOpen(true)} aria-label="查看使用与数据说明"><HelpCircle size={19} /></button>
+          <button ref={focusButtonRef} className="action-button focus-mode-toggle" type="button" aria-label={focusMode ? '退出专注地图' : '专注地图'} aria-pressed={focusMode} onClick={() => setFocusMode((current) => !current)} title={focusMode ? '恢复工作台 · Esc' : '收起面板，留出完整地图'}>
+            {focusMode ? <Minimize2 size={17} /> : <Maximize2 size={17} />}<span>{focusMode ? '退出专注' : '专注地图'}</span>
+          </button>
         </div>
       </header>
 
-      <div inert={modalOpen ? true : undefined} aria-hidden={modalOpen ? true : undefined}>
-        <PeriodTimeline value={periodId} onChange={selectPeriod} />
-      </div>
-
-      <section className="workspace" inert={modalOpen ? true : undefined} aria-hidden={modalOpen ? true : undefined}>
+      <section className={`workspace${panelVisible ? ' panel-visible' : ''}`} inert={modalOpen ? true : undefined} aria-hidden={modalOpen ? true : undefined}>
         <Suspense fallback={<div className="map-suspense"><span /><p>星图组件载入中…</p></div>}>
-          <HistoryMap people={visiblePeople} selected={selected} onSelect={selectPerson} onInspect={() => setPanelOpen(false)} />
+          <HistoryMap people={visiblePeople} selected={selected} onSelect={selectPerson} onInspect={() => { if (!focusMode) { setPanelOpen(false); setExploreOpen(false) } }} minimal={focusMode} />
         </Suspense>
-        <div className="category-filter" aria-label="人物领域筛选">
-          <button type="button" className={category === 'all' ? 'active' : ''} aria-pressed={category === 'all'} onClick={() => selectCategory('all')}>全部 <span>{peopleForPeriod(people, periodId, 'all').length}</span></button>
-          {categories.map(({ id, label, icon: Icon }) => {
-            const count = peopleForPeriod(people, periodId, id).length
-            return <button type="button" key={id} disabled={!count} className={category === id ? 'active' : ''} aria-pressed={category === id} onClick={() => selectCategory(id)} title={!count ? `${period.label}暂无${label}人物` : undefined}><Icon size={14} />{label}<span>{count}</span></button>
-          })}
+        <ExploreDrawer open={exploreOpen && !focusMode} periodId={periodId} category={category} onPeriodChange={selectPeriod} onCategoryChange={selectCategory} onClose={closeExplore} />
+        {!panelVisible && <button ref={reopenButtonRef} className="reopen-panel" type="button" aria-expanded="false" aria-controls="person-details" onClick={() => { setFocusMode(false); setPanelOpen(true) }}><span>{selected.name}</span><small>打开人物卷轴</small><ChevronRight /></button>}
+        <div id="person-details" hidden={focusMode}>
+          {panelOpen && <PersonPanel
+            person={selected}
+            people={people}
+            visiblePeople={visiblePeople}
+            visited={visited}
+            saved={savedPeople.ids.includes(selected.id)}
+            savedError={savedPeople.error}
+            saveFeedback={saveFeedback}
+            onToggleSaved={() => toggleSaved(selected)}
+            activeJourney={activeJourney}
+            onNavigateJourney={navigateJourney}
+            onEndJourney={() => setActiveJourney(null)}
+            onOpenJourneys={() => { journeyReturnFocusRef.current = journeyContentsRef.current; setJourneysOpen(true) }}
+            journeyContentsRef={journeyContentsRef}
+            onSelect={selectPerson}
+            onNavigate={navigateVisible}
+            onSurprise={surpriseMe}
+            onOpenCompare={() => setCompareOpen(true)}
+            compareButtonRef={compareButtonRef}
+            onClose={() => { setPanelOpen(false); window.requestAnimationFrame(() => reopenButtonRef.current?.focus()) }}
+          />}
         </div>
-        <div className="map-result-count" aria-live="polite">{category === 'all' ? period.label : categoryLabel[category]} · {visiblePeople.length} 位人物</div>
-        {!panelOpen && <button className="reopen-panel" type="button" onClick={() => setPanelOpen(true)}><span>{selected.name}</span><small>打开人物卷轴</small><ChevronRight /></button>}
-        {panelOpen && <PersonPanel
-          person={selected}
-          people={people}
-          visiblePeople={visiblePeople}
-          visited={visited}
-          saved={savedPeople.ids.includes(selected.id)}
-          savedError={savedPeople.error}
-          saveFeedback={saveFeedback}
-          onToggleSaved={() => toggleSaved(selected)}
-          activeJourney={activeJourney}
-          onNavigateJourney={navigateJourney}
-          onEndJourney={() => setActiveJourney(null)}
-          onOpenJourneys={() => { journeyReturnFocusRef.current = journeyContentsRef.current; setJourneysOpen(true) }}
-          journeyContentsRef={journeyContentsRef}
-          onSelect={selectPerson}
-          onNavigate={navigateVisible}
-          onSurprise={surpriseMe}
-          onOpenCompare={() => setCompareOpen(true)}
-          compareButtonRef={compareButtonRef}
-          onClose={() => setPanelOpen(false)}
-        />}
       </section>
 
-      {directoryOpen && <Directory savedIds={savedPeople.ids} savedError={savedPeople.error} onToggleSaved={toggleSaved} onClose={closeDirectory} onSelect={selectPerson} returnFocusRef={directoryButtonRef} />}
+      {directoryOpen && <Directory savedIds={savedPeople.ids} savedError={savedPeople.error} onToggleSaved={toggleSaved} onClose={closeDirectory} onSelect={selectPerson} returnFocusRef={focusMode ? focusButtonRef : directoryButtonRef} />}
       {journeysOpen && <JourneysDialog initialJourneyId={activeJourney?.journey.id} onStart={startJourney} onClose={closeJourneys} returnFocusRef={journeyReturnFocusRef} />}
       {aboutOpen && <AboutDialog onClose={closeAbout} returnFocusRef={aboutButtonRef} />}
       {compareOpen && <CompareDialog person={selected} people={people} onSelect={selectPerson} onClose={closeCompare} returnFocusRef={compareButtonRef} />}
