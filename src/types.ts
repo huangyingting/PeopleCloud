@@ -61,10 +61,39 @@ export interface PersonSource {
   url: string
 }
 
+export type RelationKind =
+  | 'family'
+  | 'mentor'
+  | 'friend'
+  | 'peer'
+  | 'historical'
+  | 'rival'
+  | 'influence'
+
 export interface PersonRelation {
   targetId: string
-  kind: 'historical' | 'family' | 'influence' | 'peer'
+  kind: RelationKind
   label: string
+  /** 一句可核对的互动叙述：两人在何时何地、因何事发生联系。 */
+  story?: string
+}
+
+export interface EncounterParticipant {
+  personId: string
+  role: string
+}
+
+export interface Encounter {
+  id: string
+  title: string
+  periodId: PeriodId
+  year: number
+  yearLabel: string
+  place: { name: string; longitude: number; latitude: number }
+  participants: EncounterParticipant[]
+  narrative: string
+  confidence: Confidence
+  sourceName: string
 }
 
 export interface Person {

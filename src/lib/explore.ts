@@ -1,6 +1,7 @@
 import { categoryLabel } from '../data/categories'
 import { periodById } from '../data/periods'
-import type { CategoryId, Person, PlaceRelation } from '../types'
+import type { CategoryId, Person, PlaceRelation, RelationKind } from '../types'
+import { bondIndexFor } from './relations'
 
 const relationLabels: Record<PlaceRelation, string> = {
   birthplace: '出生地',
@@ -43,13 +44,18 @@ export function peopleForPeriod(entries: Person[], periodId: Person['periodId'],
   return entries.filter((person) => person.periodId === periodId && (category === 'all' || person.categories.includes(category)))
 }
 
-export function relatedPeople(person: Person, entries: Person[], limit = 4) {
-  const explicit = person.relations
-    .map((relation) => {
-      const target = entries.find((candidate) => candidate.id === relation.targetId)
-      return target ? { person: target, label: relation.label, explicit: true } : null
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+export interface RelatedEntry {
+  person: Person
+  label: string
+  explicit: boolean
+  kind?: RelationKind
+  story?: string
+}
+
+export function relatedPeople(person: Person, entries: Person[], limit = 4): RelatedEntry[] {
+  const explicit: RelatedEntry[] = bondIndexFor(entries)
+    .connectionsFor(person.id)
+    .map((connection) => ({ person: connection.person, label: connection.label, explicit: true, kind: connection.kind, story: connection.story }))
 
   const explicitIds = new Set(explicit.map((entry) => entry.person.id))
   const contextual = entries
@@ -68,6 +74,7 @@ export function relatedPeople(person: Person, entries: Person[], limit = 4) {
     })
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || a.person.name.localeCompare(b.person.name, 'zh-CN'))
+    .map((entry): RelatedEntry => ({ person: entry.person, label: entry.label, explicit: false }))
 
   return [...explicit, ...contextual].slice(0, limit)
 }

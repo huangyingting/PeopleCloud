@@ -13,10 +13,12 @@ import { Compass, Focus, Layers3, MapPin, Maximize2, Moon, Mountain, Orbit, Paus
 import { categoryLabel } from '../data/categories'
 import { people as allPeople } from '../data/people'
 import { periodById } from '../data/periods'
+import { relationKinds } from '../data/relationKinds'
 import { placeRelationLabel } from '../lib/explore'
+import { bondIndexFor } from '../lib/relations'
 import { formatCoordinate, formatDistance, nearbyPeople, type Coordinate } from '../lib/geography'
 import { applyMapTheme, createMapStyle, type MapTheme } from '../lib/mapStyle'
-import type { CategoryId, Person } from '../types'
+import type { CategoryId, Encounter, Person, RelationKind } from '../types'
 
 const chinaBounds: [[number, number], [number, number]] = [[70, 14], [138, 56]]
 
@@ -69,6 +71,58 @@ interface Traveler {
   mesh: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
   curve: THREE.QuadraticBezierCurve3
   phase: number
+  reverse?: boolean
+}
+
+type Offset = [number, number]
+
+// Phyllotaxis spread for people who share one coordinate: dense cities stay readable instead of forming a long row.
+function clusterOffsets(count: number, spacing = 18): Offset[] {
+  if (count <= 1) return [[0, 0]]
+  if (count <= 3) return Array.from({ length: count }, (_, index) => [(index - (count - 1) / 2) * spacing * 2.1, 0])
+  return Array.from({ length: count }, (_, index) => {
+    const radius = spacing * Math.sqrt(index + 0.6)
+    const angle = index * 2.39996 - Math.PI / 2
+    return [Math.round(Math.cos(angle) * radius * 1.3), Math.round(Math.sin(angle) * radius)]
+  })
+}
+
+interface Placement {
+  anchor: Coordinate
+  offset: Offset
+}
+
+// Places a few dozen kilometres apart (长安 and 三原) collapse to one point at period zoom,
+// so they share a single spiral instead of two overlapping ones.
+const CLUSTER_DEGREES = 0.35
+
+function placeMarkers(people: Person[]) {
+  const clusters: Array<{ anchor: Coordinate; members: Person[] }> = []
+  for (const person of people) {
+    const { longitude, latitude } = person.place
+    const cluster = clusters.find(({ anchor }) => Math.abs(anchor[0] - longitude) <= CLUSTER_DEGREES && Math.abs(anchor[1] - latitude) <= CLUSTER_DEGREES)
+    if (cluster) cluster.members.push(person)
+    else clusters.push({ anchor: [longitude, latitude], members: [person] })
+  }
+  const placements = new Map<string, Placement>()
+  for (const { anchor, members } of clusters) {
+    const offsets = clusterOffsets(members.length)
+    members.forEach((person, index) => placements.set(person.id, { anchor, offset: offsets[index] ?? [0, 0] }))
+  }
+  return placements
+}
+
+const kindMaterials = () => Object.fromEntries(relationKinds.map((kind) => [kind.id, {
+  line: kind.dashed
+    ? new THREE.LineDashedMaterial({ color: kind.color, dashSize: 5, gapSize: 4, transparent: true, opacity: 0.72, depthTest: false, blending: THREE.AdditiveBlending })
+    : new THREE.LineBasicMaterial({ color: kind.color, transparent: true, opacity: 0.8, depthTest: false, blending: THREE.AdditiveBlending }),
+  traveler: new THREE.MeshBasicMaterial({ color: kind.color, transparent: true, opacity: 0.95, depthTest: false, blending: THREE.AdditiveBlending }),
+}])) as Record<RelationKind, { line: THREE.LineBasicMaterial | THREE.LineDashedMaterial; traveler: THREE.MeshBasicMaterial }>
+
+interface OverlayContext {
+  companions: Person[]
+  scene: Encounter | null
+  periodCount: number
 }
 
 class ConstellationOverlay {
@@ -105,7 +159,15 @@ class ConstellationOverlay {
     orbit: new THREE.MeshBasicMaterial({
       color: 0xe7b866, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthTest: false, blending: THREE.AdditiveBlending,
     }),
+    sceneLine: new THREE.LineBasicMaterial({
+      color: 0xf4d08a, transparent: true, opacity: 0.62, depthTest: false, blending: THREE.AdditiveBlending,
+    }),
+    sceneTraveler: new THREE.MeshBasicMaterial({
+      color: 0xfff0c4, transparent: true, opacity: 0.95, depthTest: false, blending: THREE.AdditiveBlending,
+    }),
   }
+  private readonly kinds = kindMaterials()
+  private context: OverlayContext = { companions: [], scene: null, periodCount: 0 }
   private viewportWidth = 0
   private viewportHeight = 0
   private people: Person[] = []
@@ -121,7 +183,7 @@ class ConstellationOverlay {
   private readonly motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
   private reducedMotion = this.motionQuery.matches
   private connections = true
-  private offsets = new Map<string, number>()
+  private offsets = new Map<string, Placement>()
   private failed = false
 
   constructor(map: MapType, container: HTMLElement) {
@@ -145,11 +207,12 @@ class ConstellationOverlay {
     this.ensureAnimation()
   }
 
-  update(people: Person[], selected: Person, offsets?: Map<string, number>) {
-    const changed = this.selected?.id !== selected.id
+  update(people: Person[], selected: Person, offsets?: Map<string, Placement>, context?: OverlayContext) {
+    const changed = this.selected?.id !== selected.id || this.context.scene?.id !== context?.scene?.id
     this.people = people
     this.selected = selected
     if (offsets) this.offsets = offsets
+    if (context) this.context = context
     if (changed) this.pulseStartedAt = performance.now()
     this.buildScene()
   }
@@ -178,8 +241,26 @@ class ConstellationOverlay {
   }
 
   private point(person: Person, width: number, height: number) {
-    const projected = this.map.project([person.place.longitude, person.place.latitude])
-    return new THREE.Vector3(projected.x + (this.offsets.get(person.id) ?? 0) - width / 2, height / 2 - projected.y, 0)
+    const placement = this.offsets.get(person.id)
+    const projected = this.map.project(placement?.anchor ?? [person.place.longitude, person.place.latitude])
+    const [dx, dy] = placement?.offset ?? [0, 0]
+    return new THREE.Vector3(projected.x + dx - width / 2, height / 2 - projected.y - dy, 0)
+  }
+
+  private arc(from: THREE.Vector3, to: THREE.Vector3, index: number) {
+    const distance = from.distanceTo(to)
+    const middle = from.clone().lerp(to, 0.5)
+    middle.y += Math.min(96, 22 + distance * 0.12) * (index % 2 ? -1 : 1)
+    return new THREE.QuadraticBezierCurve3(from, middle, to)
+  }
+
+  private addArc(curve: THREE.QuadraticBezierCurve3, line: THREE.Material, traveler: THREE.MeshBasicMaterial, size: number, phase: number, reverse = false) {
+    const object = new THREE.Line(new THREE.BufferGeometry().setFromPoints(curve.getPoints(48)), line)
+    if (line instanceof THREE.LineDashedMaterial) object.computeLineDistances()
+    this.group.add(object)
+    const mesh = new THREE.Mesh(new THREE.CircleGeometry(size, 16), traveler)
+    this.group.add(mesh)
+    this.travelers.push({ mesh, curve, phase, reverse })
   }
 
   private setupViewport() {
@@ -254,38 +335,41 @@ class ConstellationOverlay {
       this.group.add(new THREE.LineSegments(threadGeometry, this.materials.threads))
     }
 
+    for (const companion of this.context.companions) projected.set(companion.id, this.point(companion, width, height))
     const selectedPoint = projected.get(this.selected.id)!
-    const related = this.people
-      .filter((person) => person.id !== this.selected?.id)
-      .map((person) => ({
-        person,
-        explicit: this.selected?.relations.some((relation) => relation.targetId === person.id) || person.relations.some((relation) => relation.targetId === this.selected?.id),
-        shared: person.categories.filter((category) => this.selected?.categories.includes(category)).length,
-      }))
-      .filter((entry) => this.connections && (entry.explicit || entry.shared > 0))
-      .sort((a, b) => Number(b.explicit) - Number(a.explicit) || b.shared - a.shared || projected.get(a.person.id)!.distanceTo(selectedPoint) - projected.get(b.person.id)!.distanceTo(selectedPoint))
-      .slice(0, this.people.length > 14 ? 6 : 7)
-
-    related.forEach((entry, index) => {
-      const target = projected.get(entry.person.id)!
-      const distance = selectedPoint.distanceTo(target)
-      const middle = selectedPoint.clone().lerp(target, 0.5)
-      middle.y += Math.min(96, 22 + distance * 0.12) * (index % 2 ? -1 : 1)
-      const curve = new THREE.QuadraticBezierCurve3(selectedPoint, middle, target)
-      const line = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(curve.getPoints(48)),
-        entry.explicit ? this.materials.historicalLine : this.materials.contextualLine,
-      )
-      this.group.add(line)
-      const traveler = new THREE.Mesh(
-        new THREE.CircleGeometry(entry.explicit ? 3 : 2.2, 16),
-        entry.explicit ? this.materials.historicalTraveler : this.materials.contextualTraveler,
-      )
-      this.group.add(traveler)
-      this.travelers.push({ mesh: traveler, curve, phase: index / Math.max(1, related.length) })
-    })
-    this.renderer.domElement.dataset.peopleCount = String(this.people.length)
-    this.renderer.domElement.dataset.connectionCount = String(related.length)
+    const scene = this.context.scene
+    let connectionCount = 0
+    if (scene && this.connections) {
+      const projectedScene = this.map.project([scene.place.longitude, scene.place.latitude])
+      const scenePoint = new THREE.Vector3(projectedScene.x - width / 2, height / 2 - projectedScene.y, 0)
+      scene.participants.forEach(({ personId }, index) => {
+        const origin = projected.get(personId)
+        if (!origin || origin.distanceTo(scenePoint) < 6) return
+        this.addArc(this.arc(origin, scenePoint, index), this.materials.sceneLine, this.materials.sceneTraveler, 2.8, index / scene.participants.length)
+        connectionCount += 1
+      })
+    } else if (this.connections) {
+      const explicit = bondIndexFor(allPeople).connectionsFor(this.selected.id).filter((connection) => projected.has(connection.person.id))
+      explicit.slice(0, 14).forEach((connection, index) => {
+        const target = projected.get(connection.person.id)!
+        const materials = this.kinds[connection.kind]
+        this.addArc(this.arc(selectedPoint, target, index), materials.line, materials.traveler, 3, index / Math.max(1, explicit.length))
+      })
+      const explicitIds = new Set(explicit.map((connection) => connection.person.id))
+      const contextual = explicit.length >= 4 ? [] : this.people
+        .filter((person) => person.id !== this.selected?.id && !explicitIds.has(person.id))
+        .map((person) => ({ person, shared: person.categories.filter((category) => this.selected?.categories.includes(category)).length }))
+        .filter((entry) => entry.shared > 0)
+        .sort((a, b) => b.shared - a.shared || projected.get(a.person.id)!.distanceTo(selectedPoint) - projected.get(b.person.id)!.distanceTo(selectedPoint))
+        .slice(0, 4 - explicit.length)
+      contextual.forEach((entry, index) => {
+        this.addArc(this.arc(selectedPoint, projected.get(entry.person.id)!, index + explicit.length), this.materials.contextualLine, this.materials.contextualTraveler, 2.2, (index + explicit.length) / 4)
+      })
+      connectionCount = Math.min(explicit.length, 14) + contextual.length
+    }
+    this.renderer.domElement.dataset.peopleCount = String(this.context.periodCount || this.people.length)
+    this.renderer.domElement.dataset.connectionCount = String(connectionCount)
+    this.renderer.domElement.dataset.scene = scene?.id ?? ''
     this.renderer.domElement.dataset.motion = this.reducedMotion ? 'reduced' : 'animated'
 
     this.pulseRing = new THREE.Mesh(
@@ -307,8 +391,9 @@ class ConstellationOverlay {
   private renderFrame(now: number) {
     const elapsed = now - this.startedAt
     if (!this.reducedMotion) {
-      this.travelers.forEach(({ mesh, curve, phase }, index) => {
-        const progress = (elapsed / (2800 + index * 130) + phase) % 1
+      this.travelers.forEach(({ mesh, curve, phase, reverse }, index) => {
+        const cycle = (elapsed / (2800 + index * 130) + phase) % 1
+        const progress = reverse ? 1 - cycle : cycle
         mesh.position.copy(curve.getPoint(progress))
         mesh.scale.setScalar(0.72 + Math.sin(progress * Math.PI) * 0.5)
       })
@@ -373,6 +458,7 @@ class ConstellationOverlay {
     this.motionQuery.removeEventListener('change', this.handleMotion)
     this.clear()
     Object.values(this.materials).forEach((material) => material.dispose())
+    Object.values(this.kinds).forEach(({ line, traveler }) => { line.dispose(); traveler.dispose() })
     this.texture.dispose()
     this.renderer.dispose()
     this.renderer.domElement.remove()
@@ -381,6 +467,9 @@ class ConstellationOverlay {
 
 interface HistoryMapProps {
   people: Person[]
+  periodCount?: number
+  companions?: Person[]
+  scene?: Encounter | null
   selected: Person
   onSelect: (person: Person) => void
   onInspect?: () => void
@@ -391,15 +480,18 @@ interface MarkerEntry {
   marker: Marker
   button: HTMLButtonElement
   person: Person
-  offsetX: number
+  placement: Placement
+  companion: boolean
 }
+
+const noCompanions: Person[] = []
 
 interface InspectedPlace {
   coordinate: Coordinate
   name: string
 }
 
-export default function HistoryMap({ people, selected, onSelect, onInspect, minimal = false }: HistoryMapProps) {
+export default function HistoryMap({ people, periodCount, companions = noCompanions, scene = null, selected, onSelect, onInspect, minimal = false }: HistoryMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapType | null>(null)
@@ -427,6 +519,8 @@ export default function HistoryMap({ people, selected, onSelect, onInspect, mini
   const period = periodById.get(selected.periodId)!
   const selectedRef = useRef(selected)
   const peopleRef = useRef(people)
+  const sceneRef = useRef(scene)
+  sceneRef.current = scene
   const selectRef = useRef(onSelect)
   const inspectRef = useRef(onInspect)
   selectedRef.current = selected
@@ -570,23 +664,26 @@ export default function HistoryMap({ people, selected, onSelect, onInspect, mini
     const map = mapRef.current
     if (!map || !ready) return
     markersRef.current.forEach(({ marker }) => marker.remove())
-    const groups = new Map<string, Person[]>()
-    for (const person of people) {
-      const key = `${person.place.longitude.toFixed(4)},${person.place.latitude.toFixed(4)}`
-      groups.set(key, [...(groups.get(key) ?? []), person])
-    }
-    markersRef.current = people.map((person) => {
+    const participants = new Set(scene?.participants.map((participant) => participant.personId))
+    const companionIds = new Set(companions.map((person) => person.id))
+    const markerPeople = [...people, ...companions]
+    const placements = placeMarkers(markerPeople)
+    markersRef.current = markerPeople.map((person) => {
+      const companion = companionIds.has(person.id)
       const button = document.createElement('button')
       button.type = 'button'
-      button.className = person.id === selected.id ? 'map-person-marker selected' : 'map-person-marker'
+      button.className = companion ? 'map-companion-marker' : person.id === selected.id ? 'map-person-marker selected' : 'map-person-marker'
+      if (participants.has(person.id)) button.classList.add('in-scene')
       button.dataset.personId = person.id
       button.style.setProperty('--marker-color', `#${categoryColors[person.categories[0]].toString(16)}`)
       button.tabIndex = person.id === selected.id ? 0 : -1
       if (person.id === selected.id) button.setAttribute('aria-current', 'true')
-      button.setAttribute('aria-label', `${person.name}，${person.roles.join('、')}，${person.place.name}`)
+      const periodNote = companion ? `，${periodById.get(person.periodId)?.label}，与${selected.name}相关` : ''
+      button.setAttribute('aria-label', `${person.name}，${person.roles.join('、')}，${person.place.name}${periodNote}`)
       button.setAttribute('aria-describedby', 'map-keyboard-help')
       button.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter')
-      button.innerHTML = `<span class="marker-core" aria-hidden="true"></span><span class="marker-label">${person.name}</span>`
+      const periodTag = companion ? `<small>${periodById.get(person.periodId)?.shortLabel ?? ''}</small>` : ''
+      button.innerHTML = `<span class="marker-core" aria-hidden="true"></span><span class="marker-label">${person.name}${periodTag}</span>`
       button.addEventListener('click', () => selectRef.current(person))
       button.addEventListener('mouseenter', () => setHovered(person))
       button.addEventListener('mouseleave', () => setHovered((current) => current?.id === person.id ? null : current))
@@ -606,13 +703,11 @@ export default function HistoryMap({ people, selected, onSelect, onInspect, mini
         entries.forEach((entry, index) => { entry.button.tabIndex = index === nextIndex ? 0 : -1 })
         entries[nextIndex]?.button.focus()
       })
-      const group = groups.get(`${person.place.longitude.toFixed(4)},${person.place.latitude.toFixed(4)}`) ?? [person]
-      const index = group.findIndex((entry) => entry.id === person.id)
-      const offsetX = (index - (group.length - 1) / 2) * 38
-      const marker = new Marker({ element: button, anchor: 'center', offset: [offsetX, 0] })
-        .setLngLat([person.place.longitude, person.place.latitude])
+      const placement = placements.get(person.id)!
+      const marker = new Marker({ element: button, anchor: 'center', offset: placement.offset })
+        .setLngLat(placement.anchor)
         .addTo(map)
-      return { marker, button, person, offsetX }
+      return { marker, button, person, placement, companion }
     })
 
     const refreshLabels = () => {
@@ -625,18 +720,33 @@ export default function HistoryMap({ people, selected, onSelect, onInspect, mini
       const labelBudget = width < 700 ? (zoom >= 6 ? 7 : 5) : zoom >= 6 ? 15 : 10
       const occupied: Array<{ x: number; y: number }> = []
       const prioritized = [...markersRef.current].sort((a, b) => {
-        const aScore = Number(a.person.id === selected.id) * 4 + Number(a.person.featured) * 2
-        const bScore = Number(b.person.id === selected.id) * 4 + Number(b.person.featured) * 2
+        const score = (entry: MarkerEntry) => Number(entry.person.id === selected.id) * 8 + Number(participants.has(entry.person.id)) * 4 + Number(entry.companion) * 3 + Number(entry.person.featured) * 2
+        const aScore = score(a)
+        const bScore = score(b)
         return bScore - aScore || a.person.name.localeCompare(b.person.name, 'zh-CN')
       })
 
+      const points = new Map(markersRef.current.map((entry) => {
+        const point = map.project(entry.placement.anchor)
+        return [entry.person.id, { x: point.x + entry.placement.offset[0], y: point.y + entry.placement.offset[1] }]
+      }))
+      // A label runs to the right of its marker; never let it sit on top of another marker's hit area.
+      const coversMarker = (entry: MarkerEntry, point: { x: number; y: number }) => {
+        const right = point.x + 28 + entry.person.name.length * 13 + (entry.companion ? 34 : 18) + 15
+        return markersRef.current.some((other) => {
+          if (other === entry) return false
+          const target = points.get(other.person.id)!
+          return target.x > point.x + 10 && target.x < right && Math.abs(target.y - point.y) < 27
+        })
+      }
+
       for (const entry of prioritized) {
-        const point = map.project([entry.person.place.longitude, entry.person.place.latitude])
-        point.x += entry.offsetX
+        const point = points.get(entry.person.id)!
         const inside = point.x > -25 && point.x < width + 25 && point.y > -25 && point.y < height + 25
         const collides = occupied.some((used) => Math.abs(used.x - point.x) < horizontalGap && Math.abs(used.y - point.y) < verticalGap)
-        const selectedMarker = entry.person.id === selected.id
-        const show = inside && (selectedMarker || (occupied.length < labelBudget && !collides))
+        const selectedMarker = entry.person.id === selected.id || participants.has(entry.person.id)
+        const show = inside && (selectedMarker || (occupied.length < labelBudget && !collides && !coversMarker(entry, point)))
+        entry.button.classList.toggle('label-left', show && selectedMarker && coversMarker(entry, point))
         entry.button.classList.toggle('label-visible', show)
         entry.button.dataset.labelVisible = String(show)
         if (show) occupied.push(point)
@@ -644,9 +754,9 @@ export default function HistoryMap({ people, selected, onSelect, onInspect, mini
     }
     map.on('move', refreshLabels)
     refreshLabels()
-    starsRef.current?.update(people, selected, new Map(markersRef.current.map((entry) => [entry.person.id, entry.offsetX])))
+    starsRef.current?.update(people, selected, new Map(markersRef.current.map((entry) => [entry.person.id, entry.placement])), { companions, scene, periodCount: periodCount ?? people.length })
     return () => { map.off('move', refreshLabels) }
-  }, [people, ready, selected])
+  }, [people, ready, selected, companions, scene, periodCount])
 
   useEffect(() => {
     if (hovered && !people.some((person) => person.id === hovered.id)) setHovered(null)
@@ -676,6 +786,7 @@ export default function HistoryMap({ people, selected, onSelect, onInspect, mini
     const compact = window.matchMedia('(max-width: 700px)').matches
     setInspected(null)
     setOrbiting(false)
+    if (sceneRef.current?.participants.some((participant) => participant.personId === selected.id)) return
     map.flyTo({
       center: [selected.place.longitude, selected.place.latitude],
       zoom: compact ? 5.2 : 5.6,
@@ -686,6 +797,37 @@ export default function HistoryMap({ people, selected, onSelect, onInspect, mini
       essential: false,
     })
   }, [ready, selected])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !ready || !scene || !containerRef.current) return
+    const element = document.createElement('div')
+    element.className = 'scene-marker'
+    element.setAttribute('aria-hidden', 'true')
+    element.innerHTML = `<span class="scene-marker-ring"></span><span class="scene-marker-seal">${scene.title.slice(0, 1)}</span><span class="scene-marker-label">${scene.place.name}</span>`
+    const marker = new Marker({ element, anchor: 'center' }).setLngLat([scene.place.longitude, scene.place.latitude]).addTo(map)
+    const points: Coordinate[] = [[scene.place.longitude, scene.place.latitude], ...scene.participants.flatMap(({ personId }) => {
+      const person = allPeople.find((entry) => entry.id === personId)
+      return person ? [[person.place.longitude, person.place.latitude] as Coordinate] : []
+    })]
+    const longitudes = points.map(([longitude]) => longitude)
+    const latitudes = points.map(([, latitude]) => latitude)
+    const compact = window.matchMedia('(max-width: 700px)').matches
+    const height = containerRef.current.clientHeight || window.innerHeight
+    const panel = containerRef.current.closest('.workspace')?.querySelector('.person-panel')?.getBoundingClientRect()
+    setInspected(null)
+    setOrbiting(false)
+    map.fitBounds([[Math.min(...longitudes), Math.min(...latitudes)], [Math.max(...longitudes), Math.max(...latitudes)]], {
+      padding: compact
+        ? { top: Math.min(220, height * 0.36), right: 40, bottom: Math.min((panel?.height ?? 0) + 40, height * 0.45), left: 40 }
+        : { top: 110, right: (panel?.width ?? 0) + 90, bottom: 110, left: 390 },
+      maxZoom: 7.2,
+      pitch: is3DRef.current ? 36 : 0,
+      bearing: 0,
+      duration: motionDuration(1300),
+    })
+    return () => { marker.remove() }
+  }, [ready, scene])
 
   useEffect(() => {
     const map = mapRef.current
@@ -790,7 +932,7 @@ export default function HistoryMap({ people, selected, onSelect, onInspect, mini
   }
 
   return (
-    <section className={`history-map map-theme-${theme}`} aria-label={`${period.label}人物地图`} data-zoom={camera.zoom.toFixed(1)} data-pitch={camera.pitch.toFixed(0)} data-terrain={is3D && !terrainFailed} data-orbiting={orbiting}>
+    <section className={`history-map map-theme-${theme}${scene ? ' scene-active' : ''}`} aria-label={`${period.label}人物地图`} data-scene={scene?.id} data-zoom={camera.zoom.toFixed(1)} data-pitch={camera.pitch.toFixed(0)} data-terrain={is3D && !terrainFailed} data-orbiting={orbiting}>
       <div ref={containerRef} className="map-canvas" />
       <div ref={overlayRef} className="three-overlay" />
       {!ready && <div className="map-loading"><span /><strong>正在展开山河星图</strong><small>加载地理与人物坐标…</small></div>}

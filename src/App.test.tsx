@@ -7,8 +7,8 @@ import { personById } from './data/people'
 import { SAVED_PEOPLE_KEY } from './lib/savedPeople'
 
 vi.mock('./components/HistoryMap', () => ({
-  default: ({ people, selected, onSelect, onInspect }: { people: Array<{ id: string; name: string }>; selected: { id: string; name: string }; onSelect: (person: { id: string; name: string }) => void; onInspect?: () => void }) => (
-    <section aria-label="测试人物地图" data-selected={selected.id}>
+  default: ({ people, selected, scene, onSelect, onInspect }: { people: Array<{ id: string; name: string }>; selected: { id: string; name: string }; scene?: { id: string } | null; onSelect: (person: { id: string; name: string }) => void; onInspect?: () => void }) => (
+    <section aria-label="测试人物地图" data-selected={selected.id} data-scene={scene?.id ?? ''}>
       {people.map((person) => <button type="button" key={person.id} onClick={() => onSelect(person)}>{person.name}</button>)}
       <button type="button" onClick={onInspect}>测试地点探索</button>
     </section>
@@ -79,8 +79,8 @@ describe('PeopleCloud application', () => {
     const dialog = screen.getByRole('dialog', { name: '名人名录' })
     const search = within(dialog).getByRole('searchbox', { name: '搜索人物' })
     await user.type(search, '郭守敬')
-    expect(within(dialog).getByRole('status')).toHaveTextContent('找到 1 位人物')
-    await user.click(within(dialog).getByRole('button', { name: /郭守敬/ }))
+    expect(within(dialog).getByRole('status')).toHaveTextContent('找到 2 位人物')
+    await user.click(within(within(dialog).getByRole('article', { name: '郭守敬名录卡片' })).getAllByRole('button')[0])
     expect(screen.queryByRole('dialog', { name: '名人名录' })).not.toBeInTheDocument()
     expect(screen.getByRole('complementary', { name: /郭守敬人物详情/ })).toBeInTheDocument()
     expect(window.location.search).toContain('period=yuan')
@@ -410,5 +410,71 @@ describe('PeopleCloud application', () => {
     await user.click(screen.getByRole('button', { name: /如何安顿此心/ }))
     await user.click(screen.getByRole('button', { name: '开始漫游：如何安顿此心' }))
     expect(screen.getByRole('complementary', { name: '孔子人物详情' })).toBeInTheDocument()
+  })
+
+  it('shows documented ties from both sides with their stories', async () => {
+    window.history.replaceState({}, '', '/?person=li-bai')
+    render(<App />)
+    const panel = screen.getByRole('complementary', { name: /李白人物详情/ })
+    const relations = within(panel).getByRole('heading', { name: /人物关系/ }).parentElement!
+    const duFu = within(relations).getByRole('button', { name: '杜甫，知交：诗友' })
+    expect(duFu).toHaveTextContent(/744/)
+    fireEvent.click(within(relations).getByRole('button', { name: /展开全部 \d+ 段关系/ }))
+    expect(within(relations).getByRole('button', { name: /^孟浩然，/ })).toBeInTheDocument()
+    expect(within(relations).getByText('用于发现，不表示相识')).toBeInTheDocument()
+    fireEvent.click(duFu)
+    expect(screen.getByRole('complementary', { name: /杜甫人物详情/ })).toBeInTheDocument()
+  })
+
+  it('opens a shared scene, keeps it while moving between participants and closes it', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/?person=li-bai')
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '进入历史现场：李杜相遇，744—745' }))
+    const card = screen.getByRole('region', { name: '李杜相遇' })
+    expect(window.location.search).toContain('scene=li-du-meet')
+    const map = screen.getByRole('region', { name: '测试人物地图' })
+    expect(map).toHaveAttribute('data-scene', 'li-du-meet')
+    expect(within(map).getByRole('button', { name: '高适' })).toBeInTheDocument()
+
+    await user.click(within(card).getByRole('button', { name: '杜甫，初识' }))
+    expect(screen.getByRole('complementary', { name: /杜甫人物详情/ })).toBeInTheDocument()
+    expect(within(card).getByRole('button', { name: '杜甫，初识' })).toHaveAttribute('aria-current', 'true')
+    expect(window.location.search).toContain('person=du-fu')
+    expect(window.location.search).toContain('scene=li-du-meet')
+
+    await user.click(within(card).getByRole('button', { name: '离开历史现场' }))
+    expect(screen.queryByRole('region', { name: '李杜相遇' })).not.toBeInTheDocument()
+    expect(window.location.search).not.toContain('scene=')
+    expect(map).toHaveAttribute('data-scene', '')
+  })
+
+  it('restores a scene from the URL and walks scenes in chronological order', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/?scene=chibi&person=li-bai')
+    render(<App />)
+    const card = screen.getByRole('region', { name: '赤壁之战' })
+    expect(screen.getByRole('complementary', { name: /周瑜人物详情/ })).toBeInTheDocument()
+    expect(within(card).getByText(/208/)).toBeInTheDocument()
+    await user.click(within(card).getByRole('button', { name: /^下一个历史现场：/ }))
+    expect(screen.queryByRole('region', { name: '赤壁之战' })).not.toBeInTheDocument()
+    expect(window.location.search).not.toContain('scene=chibi')
+    expect(window.location.search).toMatch(/scene=[a-z-]+/)
+    await user.keyboard('{Escape}')
+    expect(window.location.search).not.toContain('scene=')
+  })
+
+  it('lists shared scenes by period in the journeys dialog', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/?person=li-bai')
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '打开主题漫游' }))
+    const dialog = screen.getByRole('dialog', { name: '主题漫游' })
+    await user.click(within(dialog).getByRole('button', { name: /历史现场/ }))
+    await user.click(within(dialog).getByRole('button', { name: /三国/ }))
+    await user.click(within(dialog).getByRole('button', { name: '进入历史现场：官渡之战，200' }))
+    expect(screen.queryByRole('dialog', { name: '主题漫游' })).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '官渡之战' })).toBeInTheDocument()
+    expect(screen.getByRole('complementary', { name: /曹操人物详情/ })).toBeInTheDocument()
   })
 })

@@ -1,10 +1,17 @@
-import { ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Bookmark, ChevronDown, ChevronUp, Columns3, Dices, List, MapPin, PanelRightClose, Route, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Bookmark, ChevronDown, ChevronUp, Columns3, Dices, Landmark, List, MapPin, Network, PanelRightClose, Route, X } from 'lucide-react'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { categoryLabel } from '../data/categories'
 import type { Journey } from '../data/journeys'
+import { encountersFor } from '../data/encounters'
+import { personById } from '../data/people'
 import { periodById } from '../data/periods'
+import { relationKindById } from '../data/relationKinds'
 import { confidenceLabel, placeRelationLabel, relatedPeople } from '../lib/explore'
-import type { Person } from '../types'
+import { bondIndexFor } from '../lib/relations'
+import type { Encounter, Person } from '../types'
+import { RelationConstellation } from './RelationConstellation'
+
+const RELATION_PREVIEW = 6
 
 interface PersonPanelProps {
   person: Person
@@ -24,13 +31,19 @@ interface PersonPanelProps {
   onNavigate: (direction: -1 | 1) => void
   onSurprise: () => void
   onOpenCompare: () => void
+  onOpenScene: (scene: Encounter) => void
   compareButtonRef: RefObject<HTMLButtonElement | null>
   onClose: () => void
 }
 
-export function PersonPanel({ person, people, visiblePeople, visited, saved, savedError, saveFeedback, onToggleSaved, activeJourney, onNavigateJourney, onEndJourney, onOpenJourneys, journeyContentsRef, onSelect, onNavigate, onSurprise, onOpenCompare, compareButtonRef, onClose }: PersonPanelProps) {
+export function PersonPanel({ person, people, visiblePeople, visited, saved, savedError, saveFeedback, onToggleSaved, activeJourney, onNavigateJourney, onEndJourney, onOpenJourneys, journeyContentsRef, onSelect, onNavigate, onSurprise, onOpenCompare, onOpenScene, compareButtonRef, onClose }: PersonPanelProps) {
   const period = periodById.get(person.periodId)!
-  const related = relatedPeople(person, people)
+  const connections = bondIndexFor(people).connectionsFor(person.id)
+  const contextual = relatedPeople(person, people, connections.length + 4).filter((entry) => !entry.explicit)
+  const scenes = encountersFor(person.id)
+  const [activeRelation, setActiveRelation] = useState<string | null>(null)
+  const [showAllRelations, setShowAllRelations] = useState(false)
+  const listedConnections = showAllRelations ? connections : connections.slice(0, RELATION_PREVIEW)
   const visibleIndex = Math.max(0, visiblePeople.findIndex((entry) => entry.id === person.id))
   const [expanded, setExpanded] = useState(false)
   const panelRef = useRef<HTMLElement>(null)
@@ -38,6 +51,8 @@ export function PersonPanel({ person, people, visiblePeople, visited, saved, sav
 
   useEffect(() => {
     if (panelRef.current) panelRef.current.scrollTop = 0
+    setShowAllRelations(false)
+    setActiveRelation(null)
   }, [person.id])
 
   return (
@@ -104,17 +119,47 @@ export function PersonPanel({ person, people, visiblePeople, visited, saved, sav
         </div>
       </section>
 
-      <section className="panel-section" aria-labelledby="related-title">
-        <h3 id="related-title"><Route size={15} /> 继续沿星河探索</h3>
-        <div className="related-grid">
-          {related.map((entry) => (
-            <button type="button" key={entry.person.id} onClick={() => onSelect(entry.person)}>
-              <span>{entry.person.name}</span>
-              <small>{entry.label}</small>
-            </button>
-          ))}
-        </div>
+      <section className="panel-section relation-section" aria-labelledby="related-title">
+        <h3 id="related-title"><Network size={15} /> 人物关系<small>{connections.length ? `${connections.length} 段有据可查的联系` : '暂无记载的直接联系'}</small></h3>
+        {connections.length > 0 && <RelationConstellation person={person} connections={connections} activeId={activeRelation} onHover={setActiveRelation} onSelect={onSelect} />}
+        {connections.length > 0 && <ul className="relation-list">
+          {listedConnections.map((connection, index) => {
+            const meta = relationKindById[connection.kind]
+            const otherPeriod = connection.person.periodId !== person.periodId ? periodById.get(connection.person.periodId)?.label : null
+            return (
+              <li key={connection.person.id} style={{ '--kind': meta.color, '--i': index } as React.CSSProperties} className={activeRelation === connection.person.id ? 'active' : undefined}>
+                <button type="button" onClick={() => onSelect(connection.person)} onMouseEnter={() => setActiveRelation(connection.person.id)} onMouseLeave={() => setActiveRelation(null)} onFocus={() => setActiveRelation(connection.person.id)} onBlur={() => setActiveRelation(null)} aria-label={`${connection.person.name}，${meta.label}：${connection.label}`}>
+                  <span className="relation-kind">{meta.label}</span>
+                  <strong>{connection.person.name}</strong>
+                  <span className="relation-label">{connection.label}{otherPeriod && <em> · {otherPeriod}</em>}</span>
+                  {connection.story && <span className="relation-story">{connection.story}</span>}
+                </button>
+              </li>
+            )
+          })}
+        </ul>}
+        {connections.length > RELATION_PREVIEW && <button className="relation-more" type="button" aria-expanded={showAllRelations} onClick={() => setShowAllRelations((current) => !current)}>{showAllRelations ? '收起' : `展开全部 ${connections.length} 段关系`}</button>}
+        {contextual.length > 0 && <div className="contextual-links">
+          <span>同时代 · 同领域<small>用于发现，不表示相识</small></span>
+          <div>{contextual.map((entry) => <button type="button" key={entry.person.id} onClick={() => onSelect(entry.person)} aria-label={`${entry.person.name}，${entry.label}`}>{entry.person.name}</button>)}</div>
+        </div>}
       </section>
+
+      {scenes.length > 0 && <section className="panel-section scene-section" aria-labelledby="scene-title">
+        <h3 id="scene-title"><Landmark size={15} /> 历史现场<small>与他人同在的时刻</small></h3>
+        <ol className="scene-list">
+          {scenes.map((scene) => (
+            <li key={scene.id}>
+              <button type="button" onClick={() => onOpenScene(scene)} aria-label={`进入历史现场：${scene.title}，${scene.yearLabel}`}>
+                <span className="scene-year">{scene.yearLabel}</span>
+                <span className="scene-copy"><strong>{scene.title}</strong><small>{scene.place.name} · 与 {scene.participants.filter((participant) => participant.personId !== person.id).map((participant) => personById.get(participant.personId)?.name).filter(Boolean).slice(0, 3).join('、')}{scene.participants.length > 4 ? ' 等' : ''}</small></span>
+                {scene.confidence === 'disputed' && <span className="scene-flag">存疑</span>}
+                <ArrowRight size={14} aria-hidden="true" />
+              </button>
+            </li>
+          ))}
+        </ol>
+      </section>}
 
       {visited.length > 1 && <section className="panel-section journey-section" aria-labelledby="journey-title">
         <h3 id="journey-title"><Route size={15} /> 你的星图足迹</h3>

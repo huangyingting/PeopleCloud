@@ -15,10 +15,10 @@ describe('exploration helpers', () => {
   })
 
   it('keeps the expanded corpus broad across every period', () => {
-    expect(people).toHaveLength(248)
+    expect(people).toHaveLength(572)
     expect(new Set(people.map((person) => person.periodId)).size).toBe(14)
-    expect(peopleForPeriod(people, 'tang', 'all')).toHaveLength(23)
-    expect(peopleForPeriod(people, 'qing', 'all')).toHaveLength(26)
+    expect(peopleForPeriod(people, 'tang', 'all')).toHaveLength(70)
+    expect(peopleForPeriod(people, 'qing', 'all')).toHaveLength(67)
     const periodIds = Array.from(new Set(people.map((person) => person.periodId)))
     expect(Math.min(...periodIds.map((periodId) => peopleForPeriod(people, periodId, 'all').length))).toBeGreaterThanOrEqual(13)
   })
@@ -31,9 +31,12 @@ describe('exploration helpers', () => {
 
   it('prioritizes explicit relationships and labels contextual links honestly', () => {
     const liBai = people.find((person) => person.id === 'li-bai')!
-    const related = relatedPeople(liBai, people)
-    expect(related[0]).toMatchObject({ person: { id: 'du-fu' }, label: '诗友', explicit: true })
-    expect(related.slice(1).every((entry) => !entry.explicit && /同一时期|同领域/.test(entry.label))).toBe(true)
+    const related = relatedPeople(liBai, people, 40)
+    expect(related[0]).toMatchObject({ person: { id: 'du-fu' }, label: '诗友', explicit: true, kind: 'friend' })
+    expect(related.some((entry) => entry.explicit && entry.person.id === 'he-zhizhang')).toBe(true)
+    const firstContextual = related.findIndex((entry) => !entry.explicit)
+    expect(related.slice(0, firstContextual).every((entry) => entry.explicit)).toBe(true)
+    expect(related.slice(firstContextual).every((entry) => !entry.explicit && /同一时期|同领域/.test(entry.label))).toBe(true)
   })
 
   it('formats BCE and unknown years', () => {

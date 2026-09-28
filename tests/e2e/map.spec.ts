@@ -80,7 +80,7 @@ test('failed elevation falls back to flat geography without losing people', asyn
   await expect(page.locator('.tile-warning')).toContainText('高程数据暂不可用')
   await expect(page.locator('.history-map')).toHaveAttribute('data-terrain', 'false')
   await expect(page.getByRole('button', { name: '立体地形' })).toBeDisabled()
-  await expect(page.locator('.map-person-marker')).toHaveCount(23)
+  await expect(page.locator('.map-person-marker')).toHaveCount(70)
   await page.getByRole('button', { name: '下一位人物' }).click()
   await expect(page.locator('.person-panel')).not.toHaveAttribute('data-person-id', 'li-bai')
 })

@@ -1,0 +1,158 @@
+/* Relationships and shared scenes. Loaded before styles.css, so selectors carry one extra class where they refine base rules. */
+
+/* Ego constellation in the person panel */
+.relation-section h3 small,
+.scene-section h3 small { margin-left: auto; color: var(--paper-muted); font-size: 10px; font-weight: 400; letter-spacing: 0; }
+.ego-constellation { display: block; width: calc(100% + 16px); height: auto; margin: -2px -8px 6px; overflow: visible; }
+.ego-orbit { fill: none; stroke: rgba(223, 193, 140, .16); stroke-width: .8; stroke-dasharray: 2 5; }
+.ego-orbit.faint { stroke: rgba(154, 201, 185, .09); }
+.ego-line { fill: none; stroke-width: 1.3; stroke-linecap: round; opacity: .72; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ego-draw .9s cubic-bezier(.3, .6, .2, 1) calc(var(--i) * 55ms + 120ms) forwards; transition: opacity .2s, stroke-width .2s; }
+.ego-line.dashed { stroke-dasharray: .028 .022; stroke-dashoffset: 0; opacity: 0; animation-name: ego-fade; }
+.ego-line.active { stroke-width: 2.2; opacity: 1; }
+.ego-line.muted { opacity: .16 !important; }
+/* One bloom per person: an endless SVG animation repaints the whole panel every frame. */
+.ego-core-glow { transform-box: fill-box; transform-origin: center; animation: ego-bloom 1.6s ease-out 120ms both; }
+.ego-core { fill: #f4dca4; stroke: #0f201c; stroke-width: 2; }
+.ego-core-label { fill: #f2e5c6; font-family: var(--font-display); font-size: 13px; letter-spacing: .12em; paint-order: stroke; stroke: #11231e; stroke-width: 4px; }
+.ego-node { cursor: pointer; opacity: 0; animation: ego-node-in .5s ease-out calc(var(--i) * 55ms + 420ms) forwards; transition: opacity .2s; }
+.ego-node text { fill: #d8dccd; font-size: 10.5px; paint-order: stroke; stroke: #11231e; stroke-width: 3.5px; stroke-linejoin: round; transition: fill .2s; }
+.ego-node .ego-period { fill: #93a198; font-size: 8px; }
+.ego-hit { fill: transparent; }
+.ego-node.active text { fill: #fff3d4; }
+.ego-node.muted { opacity: .32 !important; }
+@keyframes ego-draw { to { stroke-dashoffset: 0; } }
+@keyframes ego-fade { to { opacity: .6; } }
+@keyframes ego-node-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes ego-bloom { from { transform: scale(.4); opacity: 0; } 55% { transform: scale(1.22); opacity: 1; } to { transform: none; opacity: 1; } }
+
+/* Relation list: the ledger beneath the constellation */
+.panel-section .relation-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.relation-list li { animation: relation-in .35s ease-out calc(var(--i) * 35ms) both; }
+.relation-list button { display: grid; grid-template-columns: 50px 1fr; column-gap: 10px; row-gap: 3px; width: 100%; padding: 9px 8px 9px 10px; border: 0; border-left: 2px solid color-mix(in srgb, var(--kind) 55%, transparent); border-radius: 0 8px 8px 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background .2s, border-color .2s; }
+.relation-list li.active button, .relation-list button:hover, .relation-list button:focus-visible { border-left-color: var(--kind); background: color-mix(in srgb, var(--kind) 8%, transparent); }
+.relation-kind { grid-row: 1 / 3; padding-top: 2px; color: var(--kind); font-size: 10px; letter-spacing: .08em; }
+.relation-list strong { font-size: 14px; font-weight: 500; }
+.relation-label { grid-column: 2; color: #c9c3ad; font-size: 11px; }
+.relation-label em { color: var(--paper-muted); font-style: normal; }
+.relation-story { grid-column: 2; margin-top: 2px; color: #a9b4aa; font-size: 11.5px; line-height: 1.7; }
+.relation-more { display: block; margin: 8px 0 0 12px; padding: 4px 0; border: 0; border-bottom: 1px dashed rgba(154, 201, 185, .35); background: none; color: var(--teal); font: inherit; font-size: 11px; cursor: pointer; }
+.relation-more:hover { border-bottom-style: solid; }
+.contextual-links { margin-top: 16px; padding-top: 12px; border-top: 1px dashed rgba(224, 202, 159, .12); }
+.contextual-links > span { display: flex; align-items: baseline; gap: 8px; color: #b8bfae; font-size: 11px; }
+.contextual-links > span small { color: #88958c; font-size: 10px; }
+.contextual-links > div { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; }
+.contextual-links button { padding: 3px 0; border: 0; border-bottom: 1px dotted rgba(173, 186, 178, .4); background: none; color: #c8d0c2; font: inherit; font-size: 12px; cursor: pointer; }
+.contextual-links button:hover, .contextual-links button:focus-visible { color: var(--gold); border-bottom-color: var(--gold); }
+@keyframes relation-in { from { opacity: 0; transform: translateX(-4px); } }
+
+/* Shared scenes, drawn as a timeline */
+.panel-section .scene-list { position: relative; display: grid; gap: 2px; margin: 0; padding: 0 0 0 12px; list-style: none; }
+.scene-list::before { content: ""; position: absolute; left: 3px; top: 12px; bottom: 12px; width: 1px; background: linear-gradient(rgba(223, 193, 140, .45), rgba(223, 193, 140, .08)); }
+.scene-list button { position: relative; display: grid; grid-template-columns: 56px 1fr auto auto; align-items: center; gap: 8px; width: 100%; padding: 9px 6px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.scene-list button::before { content: ""; position: absolute; left: -12px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: #1a2d27; border: 1px solid var(--gold); transition: background .2s, box-shadow .2s; }
+.scene-list button:hover, .scene-list button:focus-visible { background: rgba(223, 193, 140, .06); }
+.scene-list button:hover::before, .scene-list button:focus-visible::before { background: var(--gold); box-shadow: 0 0 10px var(--gold); }
+.scene-year { color: var(--gold); font-size: 11px; white-space: nowrap; }
+.scene-copy { display: grid; gap: 3px; min-width: 0; }
+.scene-copy strong { font-size: 13.5px; font-weight: 500; }
+.scene-copy small { overflow: hidden; color: #a7b2a6; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.scene-flag { padding: 1px 5px; border: 1px solid rgba(208, 163, 115, .4); border-radius: 4px; color: #d0a373; font-size: 9px; }
+.scene-list button > svg { color: var(--teal); opacity: .5; transition: opacity .2s, transform .2s; }
+.scene-list button:hover > svg { opacity: 1; transform: translateX(2px); }
+
+/* Scene card floating over the map */
+.scene-card { position: absolute; z-index: 16; top: 16px; left: 16px; width: 340px; max-height: calc(100% - 150px); overflow-y: auto; padding: 16px 18px 14px; border: 1px solid rgba(223, 193, 140, .34); border-radius: 18px; background: linear-gradient(160deg, rgba(40, 36, 24, .96), rgba(16, 30, 26, .97)); box-shadow: 0 20px 60px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255, 236, 190, .06); scrollbar-width: thin; animation: scene-card-in .45s cubic-bezier(.2, .75, .2, 1); }
+.scene-card > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.scene-card-kicker { display: flex; align-items: center; gap: 6px; color: var(--gold); font-size: 10.5px; letter-spacing: .06em; }
+.scene-card > header .icon-button { width: 28px; height: 28px; border: 0; }
+.scene-card h2 { margin: 8px 0 6px; font-family: var(--font-display); font-size: 30px; font-weight: 500; letter-spacing: .08em; }
+.scene-card-place { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0; color: #cfc5a9; font-size: 12px; }
+.scene-card-narrative { margin: 12px 0 14px; color: #d6d9cc; font-size: 13px; line-height: 1.85; }
+.scene-cast { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 12px 0 0; border-top: 1px solid rgba(223, 193, 140, .14); list-style: none; }
+.scene-cast li { animation: relation-in .4s ease-out calc(var(--i) * 60ms + 200ms) both; }
+.scene-cast button { display: flex; align-items: center; gap: 7px; padding: 5px 10px 5px 5px; border: 1px solid rgba(221, 207, 170, .18); border-radius: 999px; background: rgba(255, 255, 255, .025); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: border-color .2s, background .2s; }
+.scene-cast button:hover, .scene-cast button:focus-visible { border-color: rgba(223, 193, 140, .55); }
+.scene-cast button[aria-current="true"] { border-color: var(--gold); background: rgba(223, 193, 140, .12); }
+.scene-cast-initial { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #7e4432, #2d2921); color: #f0dcb1; font-family: var(--font-display); font-size: 14px; }
+.scene-cast strong { display: block; font-size: 12.5px; font-weight: 500; }
+.scene-cast small { display: block; color: #a9b19f; font-size: 10px; }
+.scene-card > footer { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--paper-muted); font-size: 11px; }
+.scene-card > footer button { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--paper); cursor: pointer; }
+.scene-card > footer button:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
+.scene-card > footer button:disabled { opacity: .35; cursor: not-allowed; }
+.scene-card > footer a { display: flex; align-items: center; gap: 3px; margin-left: auto; color: var(--teal); font-size: 11px; text-decoration: none; }
+.scene-card > footer a:hover { text-decoration: underline; }
+@keyframes scene-card-in { from { opacity: 0; transform: translateY(-8px) scale(.98); } }
+
+/* Map: scene seal, in-scene emphasis and cross-period companions */
+.scene-marker { position: relative; display: grid; place-items: center; width: 44px; height: 44px; pointer-events: none; }
+.scene-marker-ring { position: absolute; inset: 0; border: 1px solid rgba(244, 208, 138, .7); border-radius: 50%; animation: scene-ring 2.8s ease-out infinite; }
+.scene-marker-seal { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 5px; background: #a8432f; color: #fbe9c6; font-family: var(--font-display); font-size: 17px; box-shadow: 0 0 0 3px rgba(168, 67, 47, .25), 0 0 24px rgba(244, 208, 138, .55); transform: rotate(-4deg); animation: scene-seal .6s cubic-bezier(.3, 1.4, .5, 1) both; }
+.scene-marker-label { position: absolute; top: calc(100% + 2px); left: 50%; padding: 3px 7px; border-radius: 5px; background: rgba(60, 28, 20, .9); color: #f6e3bd; font-size: 11px; white-space: nowrap; transform: translateX(-50%); }
+@keyframes scene-ring { from { transform: scale(.7); opacity: 1; } to { transform: scale(2.1); opacity: 0; } }
+@keyframes scene-seal { from { transform: scale(1.6) rotate(-14deg); opacity: 0; } }
+.history-map .map-person-marker { transition: opacity .45s, filter .45s; }
+.history-map.scene-active .map-person-marker:not(.in-scene) { opacity: .26; }
+.map-person-marker.in-scene .marker-core { box-shadow: 0 0 0 5px rgba(244, 208, 138, .22), 0 0 20px #f4d08a; }
+.map-companion-marker { position: relative; z-index: 5 !important; display: flex; width: 28px; height: 28px; align-items: center; justify-content: center; overflow: visible; padding: 8px; border: 0; background: none; cursor: pointer; animation: companion-in .5s ease-out both; }
+.map-companion-marker .marker-core { width: 10px; height: 10px; background: #0f1d1b; border: 1.5px solid var(--marker-color, #d3a85e); box-shadow: 0 0 0 4px #101e2055, 0 0 12px color-mix(in srgb, var(--marker-color) 45%, transparent); }
+.map-companion-marker .marker-core::after { content: none; }
+.map-companion-marker .marker-label { left: 26px; border-style: dashed; background: rgba(16, 30, 30, .86); color: #d6dccd; }
+.map-companion-marker .marker-label small { margin-left: 5px; color: #9eaaa1; font-size: 10px; }
+.map-companion-marker.label-visible .marker-label, .map-companion-marker:hover .marker-label, .map-companion-marker:focus-visible .marker-label { visibility: visible; transform: translate(0, -50%) scale(1); opacity: 1; }
+.map-companion-marker:hover .marker-core, .map-companion-marker:focus-visible .marker-core { transform: scale(1.3); }
+@keyframes companion-in { from { opacity: 0; } }
+
+/* Intro: one bond at a time */
+.hero-card.bond-card { display: flex; flex-direction: column; align-items: center; min-height: 0; padding: 26px 25px 22px; }
+.bond-card-stage { position: relative; width: 100%; aspect-ratio: 2 / 1; margin: 14px 0 6px; }
+.bond-card-stage svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.bond-card-arc { fill: none; stroke: var(--kind); stroke-width: 1.4; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; filter: drop-shadow(0 0 5px var(--kind)); animation: ego-draw 1.3s cubic-bezier(.4, .1, .2, 1) .35s forwards; }
+.bond-card-spark { fill: #fff3cf; filter: drop-shadow(0 0 4px #fff3cf); opacity: 0; animation: bond-spark-in .4s ease-out 1.5s forwards; }
+@keyframes bond-spark-in { to { opacity: 1; } }
+.bond-card-orb { position: absolute; top: 65%; display: grid; place-items: center; width: 50px; height: 50px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #7e4432, #2d2921); color: #efdcb2; font-family: var(--font-display); font-size: 24px; font-weight: 400; box-shadow: 0 0 0 1px color-mix(in srgb, var(--kind) 55%, transparent), 0 0 28px color-mix(in srgb, var(--kind) 30%, transparent); transform: translate(-50%, -50%); animation: bond-orb-in .7s cubic-bezier(.2, .75, .2, 1) both; }
+.bond-card-orb.first { left: 18.3%; --from: -18px; }
+.bond-card-orb.second { left: 81.7%; --from: 18px; background: radial-gradient(circle at 35% 30%, #3f6456, #1f2a26); animation-delay: .12s; }
+@keyframes bond-orb-in { from { opacity: 0; transform: translate(calc(-50% + var(--from)), -50%) scale(.8); } }
+.hero-card.bond-card h2.bond-card-names { display: flex; align-items: baseline; gap: 10px; margin: 0 0 6px; font-size: 30px; letter-spacing: .1em; }
+.bond-card-names i { color: var(--kind); font-style: normal; }
+.hero-card.bond-card > p.bond-card-kind { color: #b1a78f; font-size: 11px; letter-spacing: .05em; }
+.hero-card.bond-card blockquote { min-height: calc(12px * 1.8 * 4); margin: 16px 0 8px; animation: bond-story-in .6s ease-out .5s both; }
+@keyframes bond-story-in { from { opacity: 0; transform: translateY(4px); } }
+.bond-card-dots { display: flex; justify-content: center; gap: 2px; }
+.bond-card-dots button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; background: none; cursor: pointer; }
+.bond-card-dots button::before { content: ""; width: 6px; height: 6px; border-radius: 3px; background: rgba(223, 193, 140, .3); transition: width .3s, background .3s; }
+.bond-card-dots button[aria-pressed="true"]::before { width: 16px; background: var(--kind); }
+.bond-card-dots button:hover::before { background: rgba(223, 193, 140, .7); }
+.hero-card.bond-card .hero-card-action { margin-top: 10px; }
+
+/* Journeys dialog: themed readings or shared scenes */
+.journeys-tabs { display: flex; flex-shrink: 0; gap: 4px; width: max-content; margin: 0 28px 16px; padding: 4px; border: 1px solid var(--line); border-radius: 14px; }
+.journeys-dialog .journeys-tabs button { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 14px; border-color: transparent; font-size: 13px; }
+.journeys-dialog .journeys-tabs button[aria-pressed="true"] { color: var(--gold); border-color: var(--line); background: color-mix(in srgb, var(--gold) 8%, transparent); }
+.journeys-tabs small { color: var(--paper-muted); font-size: 11px; }
+.scene-stops .journeys-stop-index { min-width: 62px; color: var(--gold); white-space: nowrap; }
+
+@media (max-width: 700px) {
+  .scene-card { top: 44px; left: 10px; right: 10px; width: auto; max-height: calc(100% - min(42vh, 390px) - 60px); padding: 12px 14px; }
+  .scene-card h2 { margin: 4px 0; font-size: 23px; }
+  .scene-card-narrative { margin: 8px 0 10px; font-size: 12px; line-height: 1.75; }
+  .workspace:has(.person-panel.expanded) .scene-card { display: none; }
+  .journeys-tabs { margin: 0 16px 12px; }
+}
+
+@media (max-width: 560px) {
+  .hero-card.bond-card { display: flex; grid-template-columns: none; text-align: center; min-height: 0; }
+  .bond-card-stage { width: min(240px, 100%); margin-top: 6px; }
+  .hero-card.bond-card h2.bond-card-names { margin-top: 0; font-size: 26px; }
+  .hero-card.bond-card .hero-card-action { justify-content: center; margin: 10px auto 0; }
+}
+
+@media (forced-colors: active) {
+  .ego-line, .bond-card-arc { stroke: CanvasText; }
+  .scene-card { border: 1px solid CanvasText; }
+}
+
+/* A forced label (selected person, scene participants) flips left rather than hiding a neighbour. */
+.map-person-marker.label-left .marker-label { left: auto; right: 28px; }
+.map-person-marker.map-person-marker:is(:hover, :focus-visible), .map-companion-marker:is(:hover, :focus-visible) { z-index: 10 !important; }

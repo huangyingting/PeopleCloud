@@ -1,19 +1,24 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BookOpen, ChevronDown, ChevronRight, Compass, HelpCircle, LibraryBig, Map, Maximize2, Minimize2, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { categories, categoryLabel } from './data/categories'
+import { encounterById, encounters } from './data/encounters'
 import type { Journey } from './data/journeys'
 import { people, personById } from './data/people'
-import { periodById, periods } from './data/periods'
+import { periodById } from './data/periods'
 import { peopleForPeriod } from './lib/explore'
+import { bondIndexFor } from './lib/relations'
 import { readSavedPeople, SAVED_PEOPLE_KEY, writeSavedPeople } from './lib/savedPeople'
-import type { CategoryId, Person, PeriodId } from './types'
+import type { CategoryId, Encounter, Person, PeriodId } from './types'
 import { Directory } from './components/Directory'
 import { CompareDialog } from './components/CompareDialog'
 import { FocusTrap } from './components/FocusTrap'
 import { JourneysDialog } from './components/JourneysDialog'
 import { ExploreDrawer } from './components/ExploreDrawer'
 import { PersonPanel } from './components/PersonPanel'
+import { SceneCard } from './components/SceneCard'
+import { IntroBonds } from './components/IntroBonds'
 import './features.css'
+import './relations.css'
 
 const HistoryMap = lazy(() => import('./components/HistoryMap'))
 
@@ -22,10 +27,19 @@ interface InitialState {
   periodId: PeriodId
   person: Person
   category: CategoryId | 'all'
+  scene: Encounter | null
 }
+
+const isParticipant = (scene: Encounter | null, person: Person) => Boolean(scene?.participants.some((participant) => participant.personId === person.id))
 
 function readUrlState(): InitialState {
   const params = new URLSearchParams(window.location.search)
+  const scene = encounterById.get(params.get('scene') ?? '') ?? null
+  if (scene) {
+    const requested = personById.get(params.get('person') ?? '')
+    const person = requested && isParticipant(scene, requested) ? requested : personById.get(scene.participants[0].personId)!
+    return { entered: true, periodId: person.periodId, person, category: 'all', scene }
+  }
   const person = personById.get(params.get('person') ?? '')
   const periodParam = params.get('period') as PeriodId | null
   const periodId = person?.periodId ?? (periodParam && periodById.has(periodParam) ? periodParam : 'tang')
@@ -37,14 +51,15 @@ function readUrlState(): InitialState {
   const selected = person && person.periodId === periodId && (category === 'all' || person.categories.includes(category))
     ? person
     : available.find((entry) => entry.featured) ?? available[0] ?? people.find((entry) => entry.periodId === periodId)!
-  return { entered: params.has('period') || params.has('person'), periodId, person: selected, category }
+  return { entered: params.has('period') || params.has('person'), periodId, person: selected, category, scene: null }
 }
 
-function writeUrl(person: Person, category: CategoryId | 'all', mode: 'push' | 'replace' = 'push') {
+function writeUrl(person: Person, category: CategoryId | 'all', mode: 'push' | 'replace' = 'push', scene: Encounter | null = null) {
   const params = new URLSearchParams()
   params.set('period', person.periodId)
   params.set('person', person.id)
   if (category !== 'all') params.set('category', category)
+  if (scene) params.set('scene', scene.id)
   const nextUrl = `${window.location.pathname}?${params.toString()}`
   const currentUrl = `${window.location.pathname}${window.location.search}`
   if (nextUrl === currentUrl) return
@@ -52,8 +67,7 @@ function writeUrl(person: Person, category: CategoryId | 'all', mode: 'push' | '
 }
 
 function Intro({ onEnter }: { onEnter: (person?: Person) => void }) {
-  const categoryCount = new Set(people.flatMap((person) => person.categories)).size
-  const featuredPerson = personById.get('li-bai')!
+  const bondCount = bondIndexFor(people).bonds.length
   return (
     <main className="intro" id="main-content">
       <div className="intro-stars" aria-hidden="true">{Array.from({ length: 16 }, (_, index) => <i key={index} style={{ '--star': index } as React.CSSProperties} />)}</div>
@@ -64,22 +78,15 @@ function Intro({ onEnter }: { onEnter: (person?: Person) => void }) {
       <section className="hero">
         <div className="hero-eyebrow"><Sparkles size={14} /> 一部可以漫游的中国人物史</div>
         <h1>群星落人间，<br /><em>山河见其生。</em></h1>
-        <p>从先秦诸子到晚清工程师，沿时间与地理坐标，遇见改变思想、文学、科技与政治的人。</p>
+        <p>从先秦诸子到晚清工程师，沿时间与地理坐标，遇见改变思想、文学、科技与政治的人——也看见他们如何相遇、师承、交锋与相知。</p>
         <button className="enter-button" type="button" onClick={() => onEnter()}><span>进入星图</span><ChevronRight /><i aria-hidden="true" /></button>
         <div className="hero-stats" aria-label="语料统计">
           <div><strong>{people.length}</strong><span>位人物</span></div>
-          <div><strong>{periods.length}</strong><span>个时期</span></div>
-          <div><strong>{categoryCount}</strong><span>个领域</span></div>
+          <div><strong>{bondCount}</strong><span>段关系</span></div>
+          <div><strong>{encounters.length}</strong><span>个历史现场</span></div>
         </div>
       </section>
-      <aside className="hero-card">
-        <span>星图一隅 · 唐</span>
-        <div className="hero-card-orbit"><i /><b>李</b></div>
-        <h2>李白</h2><p>诗人 · 701—762</p>
-        <blockquote>“大鹏一日同风起，扶摇直上九万里。”</blockquote>
-        <small>坐标：江油 · 成长与活动地</small>
-        <button className="hero-card-action" type="button" onClick={() => onEnter(featuredPerson)} aria-label="从李白开始探索">从此人开始 <ChevronRight size={13} /></button>
-      </aside>
+      <IntroBonds onEnter={onEnter} />
       <section id="method" className="intro-method">
         <span><Map size={19} /></span><div><strong>坐标是一种历史关系</strong><p>每个地点都标明出生、籍贯、活动、任职或纪念等关系；有争议时如实标注，不把文化锚点伪装成确定事实。</p></div>
       </section>
@@ -98,8 +105,9 @@ function AboutDialog({ onClose, returnFocusRef }: { onClose: () => void; returnF
         <p>这是一组跨时代、跨领域的策展型人物样本，而不是穷尽性名录。地图帮助你建立时间、地点和人物之间的直觉联系。</p>
         <div className="about-points">
           <article><span>01</span><div><h3>地点有不同含义</h3><p>出生地、籍贯、活动地、任职地和纪念地不会混为一谈。人物详情会解释为何选择此坐标。</p></div></article>
-          <article><span>02</span><div><h3>星线不都代表史实关系</h3><p>明确的师友、君臣等关系会直接命名；“同一时期”与“同领域”只用于发现，不暗示两人相识。</p></div></article>
-          <article><span>03</span><div><h3>争议不会被抹平</h3><p>人物生年、故里或身份无法确证时，以“约”“不详”“存在争议”表达，不制造精确答案。</p></div></article>
+          <article><span>02</span><div><h3>星线的颜色即关系</h3><p>亲缘、师承、知交、君臣、对手各有一色，虚线表示同道或跨代影响；有据可查的会面附一句互动叙述。“同一时期”与“同领域”只用于发现，不暗示两人相识。</p></div></article>
+          <article><span>03</span><div><h3>历史现场是人物同在的时刻</h3><p>会面、论辩、共事与交锋被还原为地图上的一枚印记，在场者的连线汇向此地；传说与存疑的场景会单独标注。</p></div></article>
+          <article><span>04</span><div><h3>争议不会被抹平</h3><p>人物生年、故里或身份无法确证时，以“约”“不详”“存在争议”表达，不制造精确答案。</p></div></article>
         </div>
         <p className="about-source"><BookOpen size={16} /> 每个人物均附有进一步阅读来源。完整口径见项目中的数据方法文档。</p>
       </FocusTrap>
@@ -124,6 +132,7 @@ export default function App() {
   const [exploreOpen, setExploreOpen] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
   const [visited, setVisited] = useState<Person[]>(initial.entered ? [initial.person] : [])
+  const [activeScene, setActiveScene] = useState<Encounter | null>(initial.scene)
   const directoryButtonRef = useRef<HTMLButtonElement>(null)
   const aboutButtonRef = useRef<HTMLButtonElement>(null)
   const compareButtonRef = useRef<HTMLButtonElement>(null)
@@ -135,20 +144,32 @@ export default function App() {
   const reopenButtonRef = useRef<HTMLButtonElement>(null)
   const period = periodById.get(periodId)!
   const visiblePeople = useMemo(() => peopleForPeriod(people, periodId, category), [periodId, category])
+  const mapPeople = useMemo(() => {
+    if (!activeScene) return visiblePeople
+    const ids = new Set(visiblePeople.map((person) => person.id))
+    const guests = activeScene.participants.map((participant) => personById.get(participant.personId)!).filter((person) => !ids.has(person.id))
+    return [...visiblePeople, ...guests]
+  }, [activeScene, visiblePeople])
+  const companions = useMemo(() => {
+    if (activeScene) return []
+    const ids = new Set(mapPeople.map((person) => person.id))
+    return bondIndexFor(people).connectionsFor(selected.id).map((connection) => connection.person).filter((person) => !ids.has(person.id))
+  }, [activeScene, mapPeople, selected.id])
 
   const rememberPerson = useCallback((person: Person) => {
     setVisited((current) => [...current.filter((entry) => entry.id !== person.id), person].slice(-6))
   }, [])
 
-  const showPerson = useCallback((person: Person, nextCategory: CategoryId | 'all') => {
+  const showPerson = useCallback((person: Person, nextCategory: CategoryId | 'all', scene: Encounter | null = null) => {
     setSaveFeedback('')
+    setActiveScene(scene)
     setPeriodId(person.periodId)
     setCategory(nextCategory)
     setSelected(person)
     rememberPerson(person)
     setPanelOpen(true)
     setDirectoryOpen(false)
-    writeUrl(person, nextCategory)
+    writeUrl(person, nextCategory, 'push', scene)
   }, [rememberPerson])
 
   const selectPerson = useCallback((person: Person) => {
@@ -157,9 +178,23 @@ export default function App() {
       const stopIndex = current.journey.stops.findIndex((stop) => stop.personId === person.id)
       return stopIndex < 0 ? null : { ...current, stopIndex }
     })
-    const nextCategory = category === 'all' || person.categories.includes(category) ? category : 'all'
-    showPerson(person, nextCategory)
-  }, [category, showPerson])
+    const scene = isParticipant(activeScene, person) ? activeScene : null
+    const nextCategory = scene || !(category === 'all' || person.categories.includes(category)) ? 'all' : category
+    showPerson(person, nextCategory, scene)
+  }, [activeScene, category, showPerson])
+
+  const openScene = useCallback((scene: Encounter) => {
+    setActiveJourney(null)
+    setJourneysOpen(false)
+    setExploreOpen(false)
+    const person = isParticipant(scene, selected) ? selected : personById.get(scene.participants[0].personId)!
+    showPerson(person, 'all', scene)
+  }, [selected, showPerson])
+
+  const closeScene = useCallback(() => {
+    setActiveScene(null)
+    writeUrl(selected, category, 'replace')
+  }, [category, selected])
 
   const startJourney = useCallback((journey: Journey, stopIndex: number) => {
     const stop = journey.stops[stopIndex]
@@ -205,6 +240,7 @@ export default function App() {
 
   const selectPeriod = useCallback((nextPeriod: PeriodId) => {
     setActiveJourney(null)
+    setActiveScene(null)
     setSaveFeedback('')
     const sameCategory = peopleForPeriod(people, nextPeriod, category)
     const nextCategory = sameCategory.length ? category : 'all'
@@ -222,6 +258,7 @@ export default function App() {
     const candidates = peopleForPeriod(people, periodId, nextCategory)
     if (!candidates.length) return
     setActiveJourney(null)
+    setActiveScene(null)
     setSaveFeedback('')
     setCategory(nextCategory)
     const nextPerson = candidates.some((person) => person.id === selected.id) ? selected : candidates.find((person) => person.featured) ?? candidates[0]
@@ -245,6 +282,7 @@ export default function App() {
       setSelected(state.person)
       rememberPerson(state.person)
       setCategory(state.category)
+      setActiveScene(state.scene)
       setPanelOpen(true)
     }
     window.addEventListener('popstate', restore)
@@ -290,6 +328,7 @@ export default function App() {
       }
       if (event.key === 'Escape') {
         if (exploreOpen && !focusMode) closeExplore()
+        else if (activeScene && !focusMode) closeScene()
         else if (focusMode) {
           setFocusMode(false)
           focusButtonRef.current?.focus()
@@ -298,7 +337,7 @@ export default function App() {
     }
     window.addEventListener('keydown', openDirectory)
     return () => window.removeEventListener('keydown', openDirectory)
-  }, [entered, modalOpen, exploreOpen, focusMode, closeExplore])
+  }, [entered, modalOpen, exploreOpen, focusMode, closeExplore, activeScene, closeScene])
 
   if (!entered) return <Intro onEnter={enterExperience} />
 
@@ -325,8 +364,9 @@ export default function App() {
 
       <section className={`workspace${panelVisible ? ' panel-visible' : ''}`} inert={modalOpen ? true : undefined} aria-hidden={modalOpen ? true : undefined}>
         <Suspense fallback={<div className="map-suspense"><span /><p>星图组件载入中…</p></div>}>
-          <HistoryMap people={visiblePeople} selected={selected} onSelect={selectPerson} onInspect={() => { if (!focusMode) { setPanelOpen(false); setExploreOpen(false) } }} minimal={focusMode} />
+          <HistoryMap people={mapPeople} periodCount={visiblePeople.length} companions={companions} scene={activeScene} selected={selected} onSelect={selectPerson} onInspect={() => { if (!focusMode) { setPanelOpen(false); setExploreOpen(false) } }} minimal={focusMode} />
         </Suspense>
+        {activeScene && !focusMode && <SceneCard scene={activeScene} selectedId={selected.id} onSelect={selectPerson} onNavigate={openScene} onClose={closeScene} />}
         <ExploreDrawer open={exploreOpen && !focusMode} periodId={periodId} category={category} onPeriodChange={selectPeriod} onCategoryChange={selectCategory} onClose={closeExplore} />
         {!panelVisible && <button ref={reopenButtonRef} className="reopen-panel" type="button" aria-expanded="false" aria-controls="person-details" onClick={() => { setFocusMode(false); setPanelOpen(true) }}><span>{selected.name}</span><small>打开人物卷轴</small><ChevronRight /></button>}
         <div id="person-details" hidden={focusMode}>
@@ -348,6 +388,7 @@ export default function App() {
             onNavigate={navigateVisible}
             onSurprise={surpriseMe}
             onOpenCompare={() => setCompareOpen(true)}
+            onOpenScene={openScene}
             compareButtonRef={compareButtonRef}
             onClose={() => { setPanelOpen(false); window.requestAnimationFrame(() => reopenButtonRef.current?.focus()) }}
           />}
@@ -355,7 +396,7 @@ export default function App() {
       </section>
 
       {directoryOpen && <Directory savedIds={savedPeople.ids} savedError={savedPeople.error} onToggleSaved={toggleSaved} onClose={closeDirectory} onSelect={selectPerson} returnFocusRef={focusMode ? focusButtonRef : directoryButtonRef} />}
-      {journeysOpen && <JourneysDialog initialJourneyId={activeJourney?.journey.id} onStart={startJourney} onClose={closeJourneys} returnFocusRef={journeyReturnFocusRef} />}
+      {journeysOpen && <JourneysDialog initialJourneyId={activeJourney?.journey.id} onStart={startJourney} onOpenScene={openScene} onClose={closeJourneys} returnFocusRef={journeyReturnFocusRef} />}
       {aboutOpen && <AboutDialog onClose={closeAbout} returnFocusRef={aboutButtonRef} />}
       {compareOpen && <CompareDialog person={selected} people={people} onSelect={selectPerson} onClose={closeCompare} returnFocusRef={compareButtonRef} />}
     </main>
