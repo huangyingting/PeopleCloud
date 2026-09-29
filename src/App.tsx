@@ -20,7 +20,23 @@ import { IntroBonds } from './components/IntroBonds'
 import './features.css'
 import './relations.css'
 
-const HistoryMap = lazy(() => import('./components/HistoryMap'))
+const loadHistoryMap = () => import('./components/HistoryMap')
+const HistoryMap = lazy(loadHistoryMap)
+
+// The map, terrain and three.js chunks are most of the download; fetch them while the visitor reads the intro,
+// unless they have asked the browser to save data.
+function usePrefetchMap() {
+  useEffect(() => {
+    if ((navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData) return
+    const prefetch = () => { void loadHistoryMap() }
+    if (typeof window.requestIdleCallback === 'function') {
+      const handle = window.requestIdleCallback(prefetch, { timeout: 4000 })
+      return () => window.cancelIdleCallback(handle)
+    }
+    const handle = window.setTimeout(prefetch, 1500)
+    return () => window.clearTimeout(handle)
+  }, [])
+}
 
 interface InitialState {
   entered: boolean
@@ -68,6 +84,7 @@ function writeUrl(person: Person, category: CategoryId | 'all', mode: 'push' | '
 
 function Intro({ onEnter }: { onEnter: (person?: Person) => void }) {
   const bondCount = bondIndexFor(people).bonds.length
+  usePrefetchMap()
   return (
     <main className="intro" id="main-content">
       <div className="intro-stars" aria-hidden="true">{Array.from({ length: 16 }, (_, index) => <i key={index} style={{ '--star': index } as React.CSSProperties} />)}</div>

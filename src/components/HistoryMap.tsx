@@ -5,6 +5,7 @@ import {
   NavigationControl,
   ScaleControl,
   type Map as MapType,
+  type ScaleControlOptions,
 } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import * as THREE from 'three'
@@ -15,7 +16,7 @@ import { people as allPeople } from '../data/people'
 import { periodById } from '../data/periods'
 import { relationKinds } from '../data/relationKinds'
 import { placeRelationLabel } from '../lib/explore'
-import { bondIndexFor } from '../lib/relations'
+import { bondIndexFor, pairKey } from '../lib/relations'
 import { formatCoordinate, formatDistance, nearbyPeople, type Coordinate } from '../lib/geography'
 import { applyMapTheme, createMapStyle, type MapTheme } from '../lib/mapStyle'
 import type { CategoryId, Encounter, Person, RelationKind } from '../types'
@@ -26,6 +27,81 @@ function cameraOffset(container: HTMLElement): [number, number] {
   const panel = container.closest('.workspace')?.querySelector('.person-panel')?.getBoundingClientRect()
   const compact = window.matchMedia('(max-width: 700px)').matches
   return compact ? [0, -(panel?.height ?? 0) / 2] : [-(panel?.width ?? 0) / 2, 0]
+}
+
+// With terrain on, MapLibre tests every marker against the depth buffer on each move — one synchronous
+// GPU readback per marker. People and scenes are meant to float above the relief, so skip that test.
+class FloatingMarker extends Marker {
+  override _updateOpacity() {}
+}
+
+// The stock scale control unprojects two screen points on every move frame, and under terrain each of those is
+// a synchronous GPU readback. At the map centre the scale follows from zoom and latitude alone, so derive it
+// directly — and only once the camera settles.
+class SettledScaleControl extends ScaleControl {
+  constructor(options: ScaleControlOptions) {
+    super(options)
+    this._onMove = () => {
+      const maxWidth = this.options.maxWidth ?? 100
+      const metresPerPixel = (40075016.686 * Math.cos((this._map.getCenter().lat * Math.PI) / 180)) / (512 * 2 ** this._map.getZoom())
+      const metres = metresPerPixel * maxWidth
+      const [distance, unit] = metres >= 1000 ? [metres / 1000, 'ScaleControl.Kilometers' as const] : [metres, 'ScaleControl.Meters' as const]
+      const rounded = roundScale(distance)
+      this._container.style.width = `${(maxWidth * rounded) / distance}px`
+      this._container.innerHTML = `${rounded}&nbsp;${this._map._getUIString(unit)}`
+    }
+  }
+
+  override onAdd(map: MapType) {
+    const container = super.onAdd(map)
+    map.off('move', this._onMove)
+    map.on('moveend', this._onMove)
+    return container
+  }
+
+  override onRemove() {
+    this._map.off('moveend', this._onMove)
+    super.onRemove()
+  }
+}
+
+// Same 1-2-3-5 steps as MapLibre's own scale.
+function roundScale(value: number) {
+  const magnitude = 10 ** (String(Math.floor(value)).length - 1)
+  const step = value / magnitude
+  if (step < 1) {
+    const multiplier = 10 ** Math.ceil(-Math.log10(step))
+    return (magnitude * Math.round(step * multiplier)) / multiplier
+  }
+  return magnitude * (step >= 10 ? 10 : step >= 5 ? 5 : step >= 3 ? 3 : step >= 2 ? 2 : 1)
+}
+
+// Under terrain every map.project() recomputes the whole covering-tile set just to pick which DEM zoom to sample.
+// Markers, labels and the constellation project a few hundred points per frame, so pick that zoom once per task.
+const memoizedTerrains = new WeakSet<object>()
+
+function memoizeElevationZoom(terrain: NonNullable<MapType['terrain']>) {
+  if (memoizedTerrains.has(terrain)) return
+  memoizedTerrains.add(terrain)
+  const lookup = terrain.getElevationForLngLat.bind(terrain)
+  const atZoom = terrain.getElevationForLngLatZoom.bind(terrain)
+  let cached: { transform: object; zoom: number } | null = null
+  terrain.getElevationForLngLat = (lngLat, transform) => {
+    if (cached?.transform === transform) return atZoom(lngLat, cached.zoom)
+    let zoom = 0
+    terrain.getElevationForLngLatZoom = (point, chosen) => {
+      zoom = chosen
+      return atZoom(point, chosen)
+    }
+    try {
+      const elevation = lookup(lngLat, transform)
+      cached = { transform, zoom }
+      queueMicrotask(() => { cached = null })
+      return elevation
+    } finally {
+      terrain.getElevationForLngLatZoom = atZoom
+    }
+  }
 }
 
 function motionDuration(duration: number) {
@@ -71,8 +147,21 @@ interface Traveler {
   mesh: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>
   curve: THREE.QuadraticBezierCurve3
   phase: number
+  size: number
   reverse?: boolean
 }
+
+// An arc remembers its endpoints by id so camera moves can bend the existing line instead of rebuilding it.
+interface ArcLink {
+  from: string
+  to: string
+  index: number
+  line: THREE.Line
+  traveler: Traveler
+}
+
+const SCENE_POINT = '\u0000scene'
+const ARC_SEGMENTS = 48
 
 type Offset = [number, number]
 
@@ -178,6 +267,14 @@ class ConstellationOverlay {
   private startedAt = performance.now()
   private pulseStartedAt = 0
   private travelers: Traveler[] = []
+  private arcs: ArcLink[] = []
+  private stars: THREE.Points | null = null
+  private threads: THREE.LineSegments | null = null
+  private threadPairs: Array<[string, string]> = []
+  // Shared by every scene rebuild; only dispose() releases them.
+  private readonly travelerGeometry = new THREE.CircleGeometry(1, 16)
+  private readonly pulseGeometry = new THREE.RingGeometry(16, 17.5, 72)
+  private readonly orbitGeometry = new THREE.RingGeometry(22, 22.8, 96, 1, 0.25, Math.PI * 1.55)
   private pulseRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial> | null = null
   private orbitRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial> | null = null
   private readonly motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -189,18 +286,22 @@ class ConstellationOverlay {
   constructor(map: MapType, container: HTMLElement) {
     this.map = map
     this.container = container
-    this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'low-power' })
+    // On dense screens the extra pixel ratio already smooths the threads, and multisampling that larger buffer
+    // on every frame costs a lot of fill rate, so keep MSAA for standard-density displays only.
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.75)
+    this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: pixelRatio < 1.5, powerPreference: 'low-power' })
     // Some low-power/headless GPU drivers legally return null shader logs.
     // Three's development diagnostics assume a string, so disable only that
     // diagnostic path; rendering failures are still contained below.
     this.renderer.debug.checkShaderErrors = false
     this.renderer.setClearColor(0x000000, 0)
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75))
+    this.renderer.setPixelRatio(pixelRatio)
     this.renderer.domElement.className = 'constellation-canvas'
     this.renderer.domElement.setAttribute('aria-hidden', 'true')
     this.container.appendChild(this.renderer.domElement)
     this.scene.add(this.group)
     this.map.on('move', this.scheduleDraw)
+    this.map.on('moveend', this.handleMoveEnd)
     this.map.on('resize', this.scheduleDraw)
     document.addEventListener('visibilitychange', this.handleVisibility)
     this.motionQuery.addEventListener('change', this.handleMotion)
@@ -222,20 +323,31 @@ class ConstellationOverlay {
     this.buildScene()
   }
 
+  // While the camera moves only positions change; which threads and arcs exist is decided again once it settles.
   private scheduleDraw = () => {
     if (this.frame) return
     this.frame = window.requestAnimationFrame(() => {
       this.frame = 0
-      this.buildScene()
+      this.layout()
     })
+  }
+
+  private handleMoveEnd = () => {
+    window.cancelAnimationFrame(this.frame)
+    this.frame = 0
+    this.buildScene()
   }
 
   private clear() {
     while (this.group.children.length) {
       const child = this.group.children.pop() as THREE.Line | THREE.Points | THREE.Mesh
-      child.geometry?.dispose()
+      if (child.geometry !== this.travelerGeometry && child.geometry !== this.pulseGeometry && child.geometry !== this.orbitGeometry) child.geometry?.dispose()
     }
     this.travelers = []
+    this.arcs = []
+    this.stars = null
+    this.threads = null
+    this.threadPairs = []
     this.pulseRing = null
     this.orbitRing = null
   }
@@ -247,20 +359,86 @@ class ConstellationOverlay {
     return new THREE.Vector3(projected.x + dx - width / 2, height / 2 - projected.y - dy, 0)
   }
 
-  private arc(from: THREE.Vector3, to: THREE.Vector3, index: number) {
-    const distance = from.distanceTo(to)
-    const middle = from.clone().lerp(to, 0.5)
-    middle.y += Math.min(96, 22 + distance * 0.12) * (index % 2 ? -1 : 1)
-    return new THREE.QuadraticBezierCurve3(from, middle, to)
+  private project(width: number, height: number) {
+    const projected = new Map<string, THREE.Vector3>()
+    for (const person of this.people) projected.set(person.id, this.point(person, width, height))
+    for (const companion of this.context.companions) projected.set(companion.id, this.point(companion, width, height))
+    const scene = this.context.scene
+    if (scene) {
+      const point = this.map.project([scene.place.longitude, scene.place.latitude])
+      projected.set(SCENE_POINT, new THREE.Vector3(point.x - width / 2, height / 2 - point.y, 0))
+    }
+    return projected
   }
 
-  private addArc(curve: THREE.QuadraticBezierCurve3, line: THREE.Material, traveler: THREE.MeshBasicMaterial, size: number, phase: number, reverse = false) {
-    const object = new THREE.Line(new THREE.BufferGeometry().setFromPoints(curve.getPoints(48)), line)
+  private arc(from: THREE.Vector3, to: THREE.Vector3, index: number, curve = new THREE.QuadraticBezierCurve3()) {
+    const distance = from.distanceTo(to)
+    curve.v0.copy(from)
+    curve.v1.copy(from).lerp(to, 0.5)
+    curve.v1.y += Math.min(96, 22 + distance * 0.12) * (index % 2 ? -1 : 1)
+    curve.v2.copy(to)
+    return curve
+  }
+
+  private addArc(projected: Map<string, THREE.Vector3>, from: string, to: string, index: number, line: THREE.Material, traveler: THREE.MeshBasicMaterial, size: number, phase: number) {
+    const curve = this.arc(projected.get(from)!, projected.get(to)!, index)
+    const object = new THREE.Line(new THREE.BufferGeometry().setFromPoints(curve.getPoints(ARC_SEGMENTS)), line)
     if (line instanceof THREE.LineDashedMaterial) object.computeLineDistances()
     this.group.add(object)
-    const mesh = new THREE.Mesh(new THREE.CircleGeometry(size, 16), traveler)
+    const mesh = new THREE.Mesh(this.travelerGeometry, traveler)
+    mesh.scale.setScalar(size)
     this.group.add(mesh)
-    this.travelers.push({ mesh, curve, phase, reverse })
+    const entry = { mesh, curve, phase, size }
+    this.travelers.push(entry)
+    this.arcs.push({ from, to, index, line: object, traveler: entry })
+  }
+
+  // Re-projects the existing stars, threads, arcs and rings in place — no allocation of GPU buffers per frame.
+  private layout() {
+    if (!this.selected || this.failed || !this.stars) return
+    const viewport = this.setupViewport()
+    if (!viewport) return
+    const projected = this.project(viewport.width, viewport.height)
+
+    const stars = this.stars.geometry.getAttribute('position') as THREE.BufferAttribute
+    this.people.forEach((person, index) => {
+      const point = projected.get(person.id)!
+      stars.setXY(index, point.x, point.y)
+    })
+    stars.needsUpdate = true
+
+    if (this.threads) {
+      const threads = this.threads.geometry.getAttribute('position') as THREE.BufferAttribute
+      this.threadPairs.forEach(([a, b], index) => {
+        const origin = projected.get(a)!
+        const target = projected.get(b)!
+        threads.setXY(index * 2, origin.x, origin.y)
+        threads.setXY(index * 2 + 1, target.x, target.y)
+      })
+      threads.needsUpdate = true
+    }
+
+    for (const { from, to, index, line, traveler } of this.arcs) {
+      const origin = projected.get(from)
+      const target = projected.get(to)
+      if (!origin || !target) continue
+      this.arc(origin, target, index, traveler.curve)
+      const positions = line.geometry.getAttribute('position') as THREE.BufferAttribute
+      const point = new THREE.Vector3()
+      for (let step = 0; step <= ARC_SEGMENTS; step += 1) {
+        traveler.curve.getPoint(step / ARC_SEGMENTS, point)
+        positions.setXYZ(step, point.x, point.y, point.z)
+      }
+      positions.needsUpdate = true
+      if (line.material instanceof THREE.LineDashedMaterial) line.computeLineDistances()
+    }
+
+    const selectedPoint = projected.get(this.selected.id)
+    if (selectedPoint) {
+      this.pulseRing?.position.copy(selectedPoint)
+      this.orbitRing?.position.copy(selectedPoint)
+    }
+    this.renderFrame(performance.now())
   }
 
   private setupViewport() {
@@ -287,16 +465,15 @@ class ConstellationOverlay {
     if (!this.selected || this.failed) return
     const viewport = this.setupViewport()
     if (!viewport) return
-    const { width, height } = viewport
     this.clear()
+    const projected = this.project(viewport.width, viewport.height)
 
     const positions = new Float32Array(this.people.length * 3)
     const colors = new Float32Array(this.people.length * 3)
-    const projected = new Map<string, THREE.Vector3>()
+    const color = new THREE.Color()
     this.people.forEach((person, index) => {
-      const point = this.point(person, width, height)
-      const color = new THREE.Color(categoryColors[person.categories[0]])
-      projected.set(person.id, point)
+      const point = projected.get(person.id)!
+      color.set(categoryColors[person.categories[0]])
       positions[index * 3] = point.x
       positions[index * 3 + 1] = point.y
       positions[index * 3 + 2] = person.id === this.selected?.id ? 2 : 1
@@ -308,80 +485,82 @@ class ConstellationOverlay {
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
     this.materials.stars.size = this.people.length > 14 ? 21 : 24
-    const points = new THREE.Points(geometry, this.materials.stars)
-    this.group.add(points)
+    this.stars = new THREE.Points(geometry, this.materials.stars)
+    this.group.add(this.stars)
 
-    const threads: number[] = []
+    // Each star reaches for its nearest neighbour on screen, if one is close enough.
     const threadKeys = new Set<string>()
     for (const person of this.connections ? this.people : []) {
       const origin = projected.get(person.id)!
-      const nearest = this.people
-        .filter((candidate) => candidate.id !== person.id)
-        .map((candidate) => ({ candidate, distance: origin.distanceTo(projected.get(candidate.id)!) }))
-        .filter((entry) => entry.distance < 245)
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, 1)
-      for (const { candidate } of nearest) {
-        const key = [person.id, candidate.id].sort().join(':')
-        if (threadKeys.has(key)) continue
-        threadKeys.add(key)
-        const target = projected.get(candidate.id)!
-        threads.push(origin.x, origin.y, 0, target.x, target.y, 0)
+      let nearest: Person | null = null
+      let nearestDistance = 245
+      for (const candidate of this.people) {
+        if (candidate.id === person.id) continue
+        const distance = origin.distanceTo(projected.get(candidate.id)!)
+        if (distance < nearestDistance) {
+          nearest = candidate
+          nearestDistance = distance
+        }
       }
+      if (!nearest) continue
+      const key = pairKey(person.id, nearest.id)
+      if (threadKeys.has(key)) continue
+      threadKeys.add(key)
+      this.threadPairs.push([person.id, nearest.id])
     }
-    if (threads.length) {
+    if (this.threadPairs.length) {
+      const threads = new Float32Array(this.threadPairs.length * 6)
+      this.threadPairs.forEach(([a, b], index) => {
+        const origin = projected.get(a)!
+        const target = projected.get(b)!
+        threads.set([origin.x, origin.y, 0, target.x, target.y, 0], index * 6)
+      })
       const threadGeometry = new THREE.BufferGeometry()
-      threadGeometry.setAttribute('position', new THREE.Float32BufferAttribute(threads, 3))
-      this.group.add(new THREE.LineSegments(threadGeometry, this.materials.threads))
+      threadGeometry.setAttribute('position', new THREE.BufferAttribute(threads, 3))
+      this.threads = new THREE.LineSegments(threadGeometry, this.materials.threads)
+      this.group.add(this.threads)
     }
 
-    for (const companion of this.context.companions) projected.set(companion.id, this.point(companion, width, height))
-    const selectedPoint = projected.get(this.selected.id)!
+    const selectedId = this.selected.id
+    const selectedPoint = projected.get(selectedId)!
     const scene = this.context.scene
     let connectionCount = 0
     if (scene && this.connections) {
-      const projectedScene = this.map.project([scene.place.longitude, scene.place.latitude])
-      const scenePoint = new THREE.Vector3(projectedScene.x - width / 2, height / 2 - projectedScene.y, 0)
+      const scenePoint = projected.get(SCENE_POINT)!
       scene.participants.forEach(({ personId }, index) => {
         const origin = projected.get(personId)
         if (!origin || origin.distanceTo(scenePoint) < 6) return
-        this.addArc(this.arc(origin, scenePoint, index), this.materials.sceneLine, this.materials.sceneTraveler, 2.8, index / scene.participants.length)
+        this.addArc(projected, personId, SCENE_POINT, index, this.materials.sceneLine, this.materials.sceneTraveler, 2.8, index / scene.participants.length)
         connectionCount += 1
       })
     } else if (this.connections) {
-      const explicit = bondIndexFor(allPeople).connectionsFor(this.selected.id).filter((connection) => projected.has(connection.person.id))
+      const explicit = bondIndexFor(allPeople).connectionsFor(selectedId).filter((connection) => projected.has(connection.person.id))
       explicit.slice(0, 14).forEach((connection, index) => {
-        const target = projected.get(connection.person.id)!
         const materials = this.kinds[connection.kind]
-        this.addArc(this.arc(selectedPoint, target, index), materials.line, materials.traveler, 3, index / Math.max(1, explicit.length))
+        this.addArc(projected, selectedId, connection.person.id, index, materials.line, materials.traveler, 3, index / Math.max(1, explicit.length))
       })
       const explicitIds = new Set(explicit.map((connection) => connection.person.id))
       const contextual = explicit.length >= 4 ? [] : this.people
-        .filter((person) => person.id !== this.selected?.id && !explicitIds.has(person.id))
+        .filter((person) => person.id !== selectedId && !explicitIds.has(person.id))
         .map((person) => ({ person, shared: person.categories.filter((category) => this.selected?.categories.includes(category)).length }))
         .filter((entry) => entry.shared > 0)
         .sort((a, b) => b.shared - a.shared || projected.get(a.person.id)!.distanceTo(selectedPoint) - projected.get(b.person.id)!.distanceTo(selectedPoint))
         .slice(0, 4 - explicit.length)
       contextual.forEach((entry, index) => {
-        this.addArc(this.arc(selectedPoint, projected.get(entry.person.id)!, index + explicit.length), this.materials.contextualLine, this.materials.contextualTraveler, 2.2, (index + explicit.length) / 4)
+        this.addArc(projected, selectedId, entry.person.id, index + explicit.length, this.materials.contextualLine, this.materials.contextualTraveler, 2.2, (index + explicit.length) / 4)
       })
       connectionCount = Math.min(explicit.length, 14) + contextual.length
     }
-    this.renderer.domElement.dataset.peopleCount = String(this.context.periodCount || this.people.length)
-    this.renderer.domElement.dataset.connectionCount = String(connectionCount)
-    this.renderer.domElement.dataset.scene = scene?.id ?? ''
-    this.renderer.domElement.dataset.motion = this.reducedMotion ? 'reduced' : 'animated'
+    const dataset = this.renderer.domElement.dataset
+    dataset.peopleCount = String(this.context.periodCount || this.people.length)
+    dataset.connectionCount = String(connectionCount)
+    dataset.scene = scene?.id ?? ''
+    dataset.motion = this.reducedMotion ? 'reduced' : 'animated'
 
-    this.pulseRing = new THREE.Mesh(
-      new THREE.RingGeometry(16, 17.5, 72),
-      this.materials.pulse,
-    )
+    this.pulseRing = new THREE.Mesh(this.pulseGeometry, this.materials.pulse)
     this.pulseRing.position.copy(selectedPoint)
     this.group.add(this.pulseRing)
-    this.orbitRing = new THREE.Mesh(
-      new THREE.RingGeometry(22, 22.8, 96, 1, 0.25, Math.PI * 1.55),
-      this.materials.orbit,
-    )
+    this.orbitRing = new THREE.Mesh(this.orbitGeometry, this.materials.orbit)
     this.orbitRing.position.copy(selectedPoint)
     this.group.add(this.orbitRing)
     this.renderFrame(performance.now())
@@ -391,11 +570,11 @@ class ConstellationOverlay {
   private renderFrame(now: number) {
     const elapsed = now - this.startedAt
     if (!this.reducedMotion) {
-      this.travelers.forEach(({ mesh, curve, phase, reverse }, index) => {
+      this.travelers.forEach(({ mesh, curve, phase, size, reverse }, index) => {
         const cycle = (elapsed / (2800 + index * 130) + phase) % 1
         const progress = reverse ? 1 - cycle : cycle
-        mesh.position.copy(curve.getPoint(progress))
-        mesh.scale.setScalar(0.72 + Math.sin(progress * Math.PI) * 0.5)
+        curve.getPoint(progress, mesh.position)
+        mesh.scale.setScalar(size * (0.72 + Math.sin(progress * Math.PI) * 0.5))
       })
       if (this.orbitRing) {
         this.orbitRing.rotation.z = elapsed / 4200
@@ -403,7 +582,7 @@ class ConstellationOverlay {
         this.orbitRing.scale.setScalar(breath)
       }
     } else {
-      this.travelers.forEach(({ mesh, curve }, index) => mesh.position.copy(curve.getPoint((index + 1) / (this.travelers.length + 1))))
+      this.travelers.forEach(({ mesh, curve }, index) => curve.getPoint((index + 1) / (this.travelers.length + 1), mesh.position))
     }
 
     if (this.pulseRing) {
@@ -453,10 +632,14 @@ class ConstellationOverlay {
     window.cancelAnimationFrame(this.frame)
     window.cancelAnimationFrame(this.animationFrame)
     this.map.off('move', this.scheduleDraw)
+    this.map.off('moveend', this.handleMoveEnd)
     this.map.off('resize', this.scheduleDraw)
     document.removeEventListener('visibilitychange', this.handleVisibility)
     this.motionQuery.removeEventListener('change', this.handleMotion)
     this.clear()
+    this.travelerGeometry.dispose()
+    this.pulseGeometry.dispose()
+    this.orbitGeometry.dispose()
     Object.values(this.materials).forEach((material) => material.dispose())
     Object.values(this.kinds).forEach(({ line, traveler }) => { line.dispose(); traveler.dispose() })
     this.texture.dispose()
@@ -485,6 +668,7 @@ interface MarkerEntry {
 }
 
 const noCompanions: Person[] = []
+const nameCollator = new Intl.Collator('zh-CN')
 
 interface InspectedPlace {
   coordinate: Coordinate
@@ -557,7 +741,7 @@ export default function HistoryMap({ people, periodCount, companions = noCompani
         maxTileCacheSize: window.innerWidth < 700 ? 40 : 80,
       })
       map.addControl(new NavigationControl({ showCompass: true, visualizePitch: true }), 'bottom-left')
-      map.addControl(new ScaleControl({ maxWidth: 100, unit: 'metric' }), 'bottom-left')
+      map.addControl(new SettledScaleControl({ maxWidth: 100, unit: 'metric' }), 'bottom-left')
       map.addControl(new AttributionControl({ compact: true }), 'bottom-right')
       let initialized = false
       const initializeInteraction = () => {
@@ -660,72 +844,87 @@ export default function HistoryMap({ people, periodCount, companions = noCompani
     return () => query.removeEventListener('change', update)
   }, [])
 
+  // Builds one DOM marker; per-selection state (selected, scene, tab order, labels) is applied by the caller.
+  const createMarkerEntry = (person: Person, companion: boolean, placement: Placement): MarkerEntry => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = companion ? 'map-companion-marker' : 'map-person-marker'
+    button.dataset.personId = person.id
+    button.style.setProperty('--marker-color', `#${categoryColors[person.categories[0]].toString(16)}`)
+    button.setAttribute('aria-describedby', 'map-keyboard-help')
+    button.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter')
+    const periodTag = companion ? `<small>${periodById.get(person.periodId)?.shortLabel ?? ''}</small>` : ''
+    button.innerHTML = `<span class="marker-core" aria-hidden="true"></span><span class="marker-label">${person.name}${periodTag}</span>`
+    button.addEventListener('click', () => selectRef.current(person))
+    button.addEventListener('mouseenter', () => setHovered(person))
+    button.addEventListener('mouseleave', () => setHovered((current) => current?.id === person.id ? null : current))
+    button.addEventListener('focus', () => setHovered(person))
+    button.addEventListener('blur', () => setHovered((current) => current?.id === person.id ? null : current))
+    button.addEventListener('keydown', (event) => {
+      const entries = markersRef.current
+      const currentIndex = entries.findIndex((entry) => entry.person.id === person.id)
+      if (currentIndex < 0 || !entries.length) return
+      let nextIndex: number | null = null
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + entries.length) % entries.length
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % entries.length
+      if (event.key === 'Home') nextIndex = 0
+      if (event.key === 'End') nextIndex = entries.length - 1
+      if (nextIndex === null) return
+      event.preventDefault()
+      entries.forEach((entry, index) => { entry.button.tabIndex = index === nextIndex ? 0 : -1 })
+      entries[nextIndex]?.button.focus()
+    })
+    const marker = new FloatingMarker({ element: button, anchor: 'center', offset: placement.offset }).setLngLat(placement.anchor)
+    return { marker, button, person, placement, companion }
+  }
+
   useEffect(() => {
     const map = mapRef.current
     if (!map || !ready) return
-    markersRef.current.forEach(({ marker }) => marker.remove())
     const participants = new Set(scene?.participants.map((participant) => participant.personId))
     const companionIds = new Set(companions.map((person) => person.id))
     const markerPeople = [...people, ...companions]
     const placements = placeMarkers(markerPeople)
+    // Reconcile by person: selecting someone only restyles the markers that stay on the map.
+    const previous = new Map(markersRef.current.map((entry) => [entry.person.id, entry]))
     markersRef.current = markerPeople.map((person) => {
       const companion = companionIds.has(person.id)
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.className = companion ? 'map-companion-marker' : person.id === selected.id ? 'map-person-marker selected' : 'map-person-marker'
-      if (participants.has(person.id)) button.classList.add('in-scene')
-      button.dataset.personId = person.id
-      button.style.setProperty('--marker-color', `#${categoryColors[person.categories[0]].toString(16)}`)
-      button.tabIndex = person.id === selected.id ? 0 : -1
-      if (person.id === selected.id) button.setAttribute('aria-current', 'true')
+      const placement = placements.get(person.id)!
+      const reusable = previous.get(person.id)
+      const entry = reusable?.companion === companion ? reusable : createMarkerEntry(person, companion, placement)
+      previous.delete(person.id)
+      if (entry === reusable) {
+        entry.marker.setOffset(placement.offset).setLngLat(placement.anchor)
+        entry.placement = placement
+      } else {
+        // Someone who moves between this period and the companion ring gets a fresh marker of the other kind.
+        reusable?.marker.remove()
+        entry.marker.addTo(map)
+      }
+      const { button } = entry
+      const current = person.id === selected.id
+      button.classList.toggle('selected', current && !companion)
+      button.classList.toggle('in-scene', participants.has(person.id))
+      button.tabIndex = current ? 0 : -1
+      if (current) button.setAttribute('aria-current', 'true')
+      else button.removeAttribute('aria-current')
       const periodNote = companion ? `，${periodById.get(person.periodId)?.label}，与${selected.name}相关` : ''
       button.setAttribute('aria-label', `${person.name}，${person.roles.join('、')}，${person.place.name}${periodNote}`)
-      button.setAttribute('aria-describedby', 'map-keyboard-help')
-      button.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight ArrowUp ArrowDown Home End Enter')
-      const periodTag = companion ? `<small>${periodById.get(person.periodId)?.shortLabel ?? ''}</small>` : ''
-      button.innerHTML = `<span class="marker-core" aria-hidden="true"></span><span class="marker-label">${person.name}${periodTag}</span>`
-      button.addEventListener('click', () => selectRef.current(person))
-      button.addEventListener('mouseenter', () => setHovered(person))
-      button.addEventListener('mouseleave', () => setHovered((current) => current?.id === person.id ? null : current))
-      button.addEventListener('focus', () => setHovered(person))
-      button.addEventListener('blur', () => setHovered((current) => current?.id === person.id ? null : current))
-      button.addEventListener('keydown', (event) => {
-        const entries = markersRef.current
-        const currentIndex = entries.findIndex((entry) => entry.person.id === person.id)
-        if (currentIndex < 0 || !entries.length) return
-        let nextIndex: number | null = null
-        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + entries.length) % entries.length
-        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % entries.length
-        if (event.key === 'Home') nextIndex = 0
-        if (event.key === 'End') nextIndex = entries.length - 1
-        if (nextIndex === null) return
-        event.preventDefault()
-        entries.forEach((entry, index) => { entry.button.tabIndex = index === nextIndex ? 0 : -1 })
-        entries[nextIndex]?.button.focus()
-      })
-      const placement = placements.get(person.id)!
-      const marker = new Marker({ element: button, anchor: 'center', offset: placement.offset })
-        .setLngLat(placement.anchor)
-        .addTo(map)
-      return { marker, button, person, placement, companion }
+      return entry
     })
+    previous.forEach(({ marker }) => marker.remove())
 
+    // Label priority does not change while the camera moves, so rank once per rebuild.
+    const score = (entry: MarkerEntry) => Number(entry.person.id === selected.id) * 8 + Number(participants.has(entry.person.id)) * 4 + Number(entry.companion) * 3 + Number(entry.person.featured) * 2
+    const prioritized = [...markersRef.current].sort((a, b) => score(b) - score(a) || nameCollator.compare(a.person.name, b.person.name))
     const refreshLabels = () => {
-      const canvas = map.getCanvas()
-      const width = canvas.clientWidth
-      const height = canvas.clientHeight
+      // The transform already knows the viewport; reading clientWidth here would force a layout mid-frame.
+      const { width, height } = map.transform
       const zoom = map.getZoom()
       const horizontalGap = zoom >= 6.4 ? 66 : zoom >= 5.5 ? 86 : 108
       const verticalGap = zoom >= 6.4 ? 22 : 28
       const labelBudget = width < 700 ? (zoom >= 6 ? 7 : 5) : zoom >= 6 ? 15 : 10
       const occupied: Array<{ x: number; y: number }> = []
-      const prioritized = [...markersRef.current].sort((a, b) => {
-        const score = (entry: MarkerEntry) => Number(entry.person.id === selected.id) * 8 + Number(participants.has(entry.person.id)) * 4 + Number(entry.companion) * 3 + Number(entry.person.featured) * 2
-        const aScore = score(a)
-        const bScore = score(b)
-        return bScore - aScore || a.person.name.localeCompare(b.person.name, 'zh-CN')
-      })
-
       const points = new Map(markersRef.current.map((entry) => {
         const point = map.project(entry.placement.anchor)
         return [entry.person.id, { x: point.x + entry.placement.offset[0], y: point.y + entry.placement.offset[1] }]
@@ -746,16 +945,33 @@ export default function HistoryMap({ people, periodCount, companions = noCompani
         const collides = occupied.some((used) => Math.abs(used.x - point.x) < horizontalGap && Math.abs(used.y - point.y) < verticalGap)
         const selectedMarker = entry.person.id === selected.id || participants.has(entry.person.id)
         const show = inside && (selectedMarker || (occupied.length < labelBudget && !collides && !coversMarker(entry, point)))
-        entry.button.classList.toggle('label-left', show && selectedMarker && coversMarker(entry, point))
-        entry.button.classList.toggle('label-visible', show)
-        entry.button.dataset.labelVisible = String(show)
+        const visible = String(show)
+        // Only touch the DOM when a label actually flips; rewriting identical state still invalidates style.
+        if (entry.button.dataset.labelVisible !== visible) {
+          entry.button.classList.toggle('label-visible', show)
+          entry.button.dataset.labelVisible = visible
+        }
+        const left = show && selectedMarker && coversMarker(entry, point)
+        if (entry.button.classList.contains('label-left') !== left) entry.button.classList.toggle('label-left', left)
         if (show) occupied.push(point)
       }
     }
-    map.on('move', refreshLabels)
+    // Labels settle at the end of a flight; while moving, re-layout a few times a second at most.
+    let lastRefresh = 0
+    const refreshWhileMoving = () => {
+      const now = performance.now()
+      if (now - lastRefresh < 100) return
+      lastRefresh = now
+      refreshLabels()
+    }
+    map.on('move', refreshWhileMoving)
+    map.on('moveend', refreshLabels)
     refreshLabels()
     starsRef.current?.update(people, selected, new Map(markersRef.current.map((entry) => [entry.person.id, entry.placement])), { companions, scene, periodCount: periodCount ?? people.length })
-    return () => { map.off('move', refreshLabels) }
+    return () => {
+      map.off('move', refreshWhileMoving)
+      map.off('moveend', refreshLabels)
+    }
   }, [people, ready, selected, companions, scene, periodCount])
 
   useEffect(() => {
@@ -772,6 +988,7 @@ export default function HistoryMap({ people, periodCount, companions = noCompani
     const map = mapRef.current
     if (!map || !ready) return
     map.setTerrain(is3D && !terrainFailed ? { source: 'elevation', exaggeration: 1.35 } : null)
+    if (map.terrain) memoizeElevationZoom(map.terrain)
     map.setLayoutProperty('buildings', 'visibility', is3D ? 'visible' : 'none')
     map.easeTo({ pitch: is3D ? 52 : 0, bearing: is3D ? map.getBearing() : 0, duration: motionDuration(700) })
   }, [ready, is3D, terrainFailed])
@@ -805,7 +1022,7 @@ export default function HistoryMap({ people, periodCount, companions = noCompani
     element.className = 'scene-marker'
     element.setAttribute('aria-hidden', 'true')
     element.innerHTML = `<span class="scene-marker-ring"></span><span class="scene-marker-seal">${scene.title.slice(0, 1)}</span><span class="scene-marker-label">${scene.place.name}</span>`
-    const marker = new Marker({ element, anchor: 'center' }).setLngLat([scene.place.longitude, scene.place.latitude]).addTo(map)
+    const marker = new FloatingMarker({ element, anchor: 'center' }).setLngLat([scene.place.longitude, scene.place.latitude]).addTo(map)
     const points: Coordinate[] = [[scene.place.longitude, scene.place.latitude], ...scene.participants.flatMap(({ personId }) => {
       const person = allPeople.find((entry) => entry.id === personId)
       return person ? [[person.place.longitude, person.place.latitude] as Coordinate] : []
@@ -835,7 +1052,7 @@ export default function HistoryMap({ people, periodCount, companions = noCompani
     const element = document.createElement('div')
     element.className = 'inspection-marker'
     element.setAttribute('aria-hidden', 'true')
-    const marker = new Marker({ element }).setLngLat(inspected.coordinate).addTo(map)
+    const marker = new FloatingMarker({ element }).setLngLat(inspected.coordinate).addTo(map)
     const close = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || containerRef.current?.closest('[inert]')) return
       event.preventDefault()
